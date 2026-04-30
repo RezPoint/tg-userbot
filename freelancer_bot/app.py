@@ -24,6 +24,8 @@ LOGGER = logging.getLogger("freelancer_bot")
 class LeadBot:
     def __init__(self, config: RuntimeConfig):
         self.config = config
+        config.user_session_path.parent.mkdir(parents=True, exist_ok=True)
+        config.bot_session_path.parent.mkdir(parents=True, exist_ok=True)
         self.storage = Storage(config.database_path)
         self.sources = enabled_sources()
         self.user_client = TelegramClient(
@@ -230,4 +232,3 @@ def cli() -> None:
         return
 
     asyncio.run(run_app())
-
