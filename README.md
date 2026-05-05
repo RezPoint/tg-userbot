@@ -1,27 +1,48 @@
 # Telegram Freelance Lead Bot
 
-Личный радар для поиска заказов на Telegram-ботов, парсинг, автоматизацию и Python-разработку в Telegram-каналах. Бот читает заданные публичные источники через пользовательский Telegram API, фильтрует сообщения по ключевым и стоп-словам, дедуплицирует лиды в SQLite и отправляет подходящие посты в вашего Telegram-бота.
+Telegram Freelance Lead Bot is a small Python bot that monitors selected Telegram channels for freelance orders and sends matching leads to your own Telegram bot.
 
-## Как это работает
+It works without AI: the matching logic is a transparent keyword/stop-word score that you can edit in code.
 
-- `freelancer_bot/sources.py` содержит стартовый список каналов для теста.
-- `freelancer_bot/filters.py` содержит ключевые слова, стоп-слова и минимальный score.
-- User API (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`) читает каналы и чаты.
-- Bot token (`TELEGRAM_BOT_TOKEN`) отправляет найденные лиды вам.
-- `/start` в вашем боте подписывает текущий чат на уведомления.
+## What It Does
 
-Bot token сам по себе не умеет читать произвольные Telegram-каналы. Для мониторинга нужен пользовательский Telegram API с аккаунтом, у которого есть доступ к нужным каналам/группам.
+- Reads public Telegram channels and groups through your Telegram user session.
+- Filters messages by weighted keywords and stop-words.
+- Saves processed leads in SQLite to avoid duplicates.
+- Sends matching leads to your Telegram bot.
+- Lets you subscribe/unsubscribe a chat with `/start` and `/stop`.
+- Includes `/status`, `/sources`, `/keywords`, and `/test` commands.
 
-## Быстрый старт
+## How It Works
+
+Telegram has two different APIs involved here:
+
+- **Telegram user API** (`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`) reads channels and groups your account can access.
+- **Telegram Bot API** (`TELEGRAM_BOT_TOKEN`) sends matched leads to you.
+
+A bot token alone cannot read arbitrary Telegram channels. The app needs a user session for monitoring and a bot token for delivery.
+
+## Requirements
+
+- Python 3.10+
+- Telegram account
+- Telegram API credentials from <https://my.telegram.org>
+- Telegram bot token from [@BotFather](https://t.me/BotFather)
+
+## Quick Start
 
 ```bash
+git clone https://github.com/YOUR_USERNAME/telegram-freelance-lead-bot.git
+cd telegram-freelance-lead-bot
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
 cp .env.example .env
 ```
 
-Заполните `.env`:
+Edit `.env`:
 
 ```bash
 TELEGRAM_API_ID=123456
@@ -29,46 +50,127 @@ TELEGRAM_API_HASH=your_api_hash
 TELEGRAM_BOT_TOKEN=123456:bot_token
 ```
 
-Если переносите данные из старого проекта, старые имена `API_ID`, `API_HASH`, `BOT_TOKEN` и `TARGET_USER_ID` тоже поддерживаются. Существующий Telethon session-файл можно положить в `sessions/freelancer_user.session`; это путь по умолчанию для пользовательской сессии.
-
-Запустите:
+Run:
 
 ```bash
 python -m freelancer_bot
 ```
 
-При первом запуске Telethon попросит номер телефона и код входа. После запуска откройте вашего бота в Telegram и отправьте `/start`. Если хотите заранее зафиксировать чат для доставки, укажите `TELEGRAM_TARGET_CHAT_ID` в `.env`.
+On the first run, Telethon may ask for your phone number and Telegram login code. After the app starts, open your Telegram bot and send `/start` to subscribe that chat to lead notifications.
 
-## Настройка поиска
+## Configuration
 
-Ключевые слова и стоп-слова редактируются в [freelancer_bot/filters.py](/Users/egorandrienko/Projects/фриланс бот/freelancer_bot/filters.py). Источники редактируются в [freelancer_bot/sources.py](/Users/egorandrienko/Projects/фриланс бот/freelancer_bot/sources.py).
+### Sources
 
-Стартовая логика такая:
+Edit [freelancer_bot/sources.py](freelancer_bot/sources.py) to change monitored Telegram channels.
 
-- высокий приоритет: `telegram bot`, `тг бот`, `парсер`, `бот`, `mini app`, `webapp`, `api`, `автоматизация`;
-- средний приоритет: `python`, `backend`, `интеграция`, `ai агент`;
-- стоп-слова режут шум: дизайн, SMM, отзывы, лайки, казино, ставки, офис, холодные вакансии без проекта.
+Each source looks like this:
 
-Со временем полезно смотреть первые 50-100 уведомлений и править веса/стоп-слова под ваш реальный вкус.
+```python
+Source("@freelansim_ru", "Хабр Фриланс", "freelance and development orders")
+```
 
-## Команды в Telegram
+If a source stops resolving, remove it or set `enabled=False`.
 
-- `/start` — подписать чат на уведомления.
-- `/stop` — отписать чат.
-- `/status` — показать количество источников, подписчиков и сохраненных лидов.
-- `/sources` — показать активные источники.
-- `/keywords` — показать текущие ключевые и стоп-слова.
-- `/test текст заказа` — проверить, пройдет ли текст фильтр.
+### Keywords And Stop-Words
 
-## Проверка
+Edit [freelancer_bot/filters.py](freelancer_bot/filters.py).
+
+Important settings:
+
+- `KEYWORDS`: words and phrases that increase the lead score.
+- `STOP_WORDS`: words and phrases that reject a message immediately.
+- `MIN_SCORE`: minimum score needed to send the lead.
+
+Example:
+
+```python
+KEYWORDS = {
+    "telegram bot": 5,
+    "тг бот": 5,
+    "парсер": 4,
+    "python": 2,
+}
+
+STOP_WORDS = [
+    "smm",
+    "казино",
+    "ставки",
+]
+```
+
+You can test the filter without connecting to Telegram:
 
 ```bash
-python -m unittest
+python -m freelancer_bot --check-filter "Нужно разработать телеграм бот на Python"
+```
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---:|---|
+| `TELEGRAM_API_ID` | yes | API ID from <https://my.telegram.org> |
+| `TELEGRAM_API_HASH` | yes | API hash from <https://my.telegram.org> |
+| `TELEGRAM_BOT_TOKEN` | yes | Bot token from [@BotFather](https://t.me/BotFather) |
+| `TELEGRAM_TARGET_CHAT_ID` | no | Chat ID to subscribe automatically. If omitted, send `/start` to the bot. |
+| `DATABASE_PATH` | no | SQLite database path. Default: `data/leads.sqlite3` |
+| `USER_SESSION_PATH` | no | Telethon user session path. Default: `sessions/freelancer_user` |
+| `BOT_SESSION_PATH` | no | Telethon bot session path. Default: `sessions/freelancer_delivery_bot` |
+| `CATCH_UP_LIMIT` | no | How many recent messages to scan per source on startup. Default: `25` |
+| `SEND_CATCH_UP` | no | Whether to scan recent messages on startup. Default: `true` |
+| `LOG_LEVEL` | no | Python log level. Default: `INFO` |
+
+Legacy names `API_ID`, `API_HASH`, `BOT_TOKEN`, and `TARGET_USER_ID` are also supported for compatibility with older parser projects.
+
+## Bot Commands
+
+- `/start` - subscribe current chat to lead notifications.
+- `/stop` - unsubscribe current chat.
+- `/status` - show source/subscriber/lead counts.
+- `/sources` - list enabled sources.
+- `/keywords` - preview current keywords and stop-words.
+- `/test text` - check whether a sample text passes the filter.
+
+## Running In The Background
+
+Simple local run:
+
+```bash
+python -m freelancer_bot
+```
+
+Basic background run:
+
+```bash
+nohup python -m freelancer_bot > bot.log 2>&1 &
+```
+
+For a VPS, use `systemd`, Docker, or a process manager. Keep `.env`, `sessions/`, and `data/` private.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests
 python -m py_compile freelancer_bot/*.py
 ```
 
-## Безопасность
+## Security
 
-Не коммитьте `.env`, `sessions/` и `data/`. Они уже добавлены в `.gitignore`.
+Never publish:
 
-Мониторьте только источники, к которым у вас есть доступ, и не используйте найденные контакты для массового спама. Этот проект рассчитан на ручной, аккуратный отклик на релевантные заказы.
+- `.env`
+- `sessions/`
+- `*.session`
+- `*.db`
+- `data/`
+
+Telegram session files can give access to your Telegram account. Treat them like passwords.
+
+## Responsible Use
+
+Monitor only sources your Telegram account can access. This project is intended for personal lead discovery and manual replies, not spam or automated outreach.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
