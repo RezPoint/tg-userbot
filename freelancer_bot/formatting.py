@@ -5,6 +5,8 @@ import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from telethon import Button
+
 from .sources import Source
 from .storage import LeadRecord
 
@@ -12,11 +14,43 @@ from .storage import LeadRecord
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
+def lead_buttons(lead_id: int, has_draft: bool, link: str | None) -> list[list[Button]]:
+    row: list[Button] = []
+    if has_draft:
+        row.append(Button.inline("📄 Показать черновик", f"draft:{lead_id}".encode()))
+        row.append(Button.inline("🔄 Перегенерировать", f"redraft:{lead_id}".encode()))
+    else:
+        row.append(Button.inline("✍️ Сгенерировать", f"draft:{lead_id}".encode()))
+    second = [Button.inline("❌ Скрыть", f"hide:{lead_id}".encode())]
+    if link:
+        second.insert(0, Button.url("🔗 Открыть пост", link))
+    return [row, second]
+
+
+def draft_buttons(lead_id: int) -> list[list[Button]]:
+    return [[
+        Button.inline("🔄 Ещё вариант", f"redraft:{lead_id}".encode()),
+        Button.inline("❌ Скрыть", f"hidedraft:{lead_id}".encode()),
+    ]]
+
+
+def menu_buttons() -> list[list[Button]]:
+    return [
+        [
+            Button.inline("📊 Статус", b"menu:status"),
+            Button.inline("📡 Источники", b"menu:sources"),
+        ],
+        [
+            Button.inline("🔑 Ключи", b"menu:keywords"),
+            Button.inline("🔕 Отписаться", b"menu:stop"),
+        ],
+    ]
+
+
 def format_draft(lead_id: int, body: str, version: int = 1) -> str:
     return (
         f"<b>✍️ Черновик отклика</b> · лид <code>#{lead_id}</code> · v{version}\n\n"
-        f"<blockquote>{html.escape(body)}</blockquote>\n\n"
-        f"Перегенерировать: <code>/redraft {lead_id}</code>"
+        f"<blockquote>{html.escape(body)}</blockquote>"
     )
 
 

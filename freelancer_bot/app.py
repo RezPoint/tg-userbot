@@ -14,7 +14,7 @@ from telethon.tl.custom.message import Message
 from .config import RuntimeConfig
 from .drafts import DraftGenerator
 from .filters import KEYWORDS, STOP_WORDS, match_text
-from .formatting import format_draft, format_lead
+from .formatting import draft_buttons, format_draft, format_lead, lead_buttons, menu_buttons
 from .knowledge_base import KnowledgeBase
 from .llm_classifier import Classification, LeadClassifier
 from .sources import Source, enabled_sources
@@ -83,8 +83,9 @@ class LeadBot:
             await event.respond(
                 "Готово. Этот чат подписан на лиды.\n\n"
                 f"Chat ID: <code>{chat_id}</code>\n"
-                "Команды: /status, /sources, /keywords, /draft id, /redraft id, /test текст, /stop",
+                "Под каждым лидом — кнопки для черновика. Меню снизу.",
                 parse_mode="html",
+                buttons=menu_buttons(),
             )
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/stop"))
@@ -94,30 +95,15 @@ class LeadBot:
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/status"))
         async def status(event: events.NewMessage.Event) -> None:
-            stats = self.storage.stats()
-            await event.respond(
-                "Статус:\n"
-                f"- источников: {len(self.sources)}\n"
-                f"- подписчиков: {stats['subscribers']}\n"
-                f"- лидов в базе: {stats['leads']}\n"
-                f"- ожидают повторной отправки: {stats['pending']}"
-            )
+            await event.respond(self._status_text(), parse_mode="html")
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/sources"))
         async def sources(event: events.NewMessage.Event) -> None:
-            lines = [f"{index}. {source.handle} — {source.title}" for index, source in enumerate(self.sources, 1)]
-            await event.respond("Активные источники:\n" + "\n".join(lines))
+            await event.respond(self._sources_text(), parse_mode="html")
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/keywords"))
         async def keywords(event: events.NewMessage.Event) -> None:
-            keyword_preview = ", ".join(list(KEYWORDS.keys())[:35])
-            stop_preview = ", ".join(STOP_WORDS[:35])
-            await event.respond(
-                "Ключевые слова:\n"
-                f"{keyword_preview}\n\n"
-                "Стоп-слова:\n"
-                f"{stop_preview}"
-            )
+            await event.respond(self._keywords_text())
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/(?:re)?draft(?:\s+(\d+))?"))
         async def draft_cmd(event: events.NewMessage.Event) -> None:
@@ -128,51 +114,10 @@ class LeadBot:
             if not raw_id:
                 await event.respond("Пришли так: <code>/draft 73</code>", parse_mode="html")
                 return
-            lead_id = int(raw_id)
-            force = event.raw_text.startswith("/redraft")
-
-            if not force:
-                cached = self.storage.get_draft(lead_id)
-                if cached is not None:
-                    await event.respond(
-                        format_draft(lead_id, cached["body"], version=cached["version"]),
-                        parse_mode="html",
-                        link_preview=False,
-                    )
-                    return
-
-            lead = self.storage.get_lead_with_classification(lead_id)
-            if lead is None:
-                await event.respond(f"Лид #{lead_id} не найден.")
-                return
-
-            classification = None
-            if lead.get("priority") is not None:
-                from .llm_classifier import Classification as _C
-                classification = _C(
-                    is_match=bool(lead["is_match"]),
-                    priority=int(lead["priority"]),
-                    task_type=lead.get("task_type"),
-                    estimated_budget=lead.get("estimated_budget"),
-                    urgency=lead.get("urgency") or "unknown",
-                    stack_match=tuple(lead.get("stack_match") or []),
-                    summary=lead.get("summary"),
-                    raw={}, model="", tokens_used=0,
-                )
-
-            await event.respond("Генерирую черновик...")
-            draft = await self.drafter.generate(lead["text"], classification)
-            if draft is None:
-                await event.respond("Не удалось сгенерировать. Попробуй ещё раз.")
-                return
-            version = self.storage.save_draft(
-                lead_id,
-                body=draft.body, kb_doc_ids=draft.kb_doc_ids,
-                model=draft.model, tokens_used=draft.tokens_used,
-            )
-            await event.respond(
-                format_draft(lead_id, draft.body, version=version),
-                parse_mode="html", link_preview=False,
+            await self._handle_draft_request(
+                int(raw_id),
+                chat_id=int(event.chat_id),
+                force=event.raw_text.startswith("/redraft"),
             )
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/test(?:\s+(.+))?"))
@@ -181,7 +126,6 @@ class LeadBot:
             if not text:
                 await event.respond("Пришли так: /test нужен телеграм бот на Python")
                 return
-
             result = match_text(text)
             if result.accepted:
                 await event.respond(
@@ -194,6 +138,138 @@ class LeadBot:
                     else f"score ниже порога: {result.score}"
                 )
                 await event.respond(f"Не пройдет фильтр: {reason}")
+
+        @self.bot_client.on(events.CallbackQuery)
+        async def on_callback(event: events.CallbackQuery.Event) -> None:
+            await self._handle_callback(event)
+
+    async def _handle_callback(self, event: events.CallbackQuery.Event) -> None:
+        try:
+            data = event.data.decode()
+        except UnicodeDecodeError:
+            await event.answer("Кривой callback")
+            return
+        action, _, arg = data.partition(":")
+        chat_id = int(event.chat_id)
+
+        if action in {"draft", "redraft"}:
+            if self.drafter is None:
+                await event.answer("GROQ_API_KEY не задан", alert=True)
+                return
+            try:
+                lead_id = int(arg)
+            except ValueError:
+                await event.answer("Неверный ID")
+                return
+            await event.answer("Генерирую..." if action == "redraft" else "Открываю...")
+            await self._handle_draft_request(lead_id, chat_id=chat_id, force=(action == "redraft"))
+            return
+
+        if action == "hide":
+            await event.answer("Скрыто")
+            try:
+                await event.delete()
+            except RPCError:
+                pass
+            return
+
+        if action == "hidedraft":
+            await event.answer("Черновик скрыт")
+            try:
+                await event.delete()
+            except RPCError:
+                pass
+            return
+
+        if action == "menu":
+            await self._handle_menu_callback(event, arg)
+            return
+
+        await event.answer("Неизвестная команда")
+
+    async def _handle_menu_callback(self, event: events.CallbackQuery.Event, sub: str) -> None:
+        if sub == "status":
+            await event.answer()
+            await event.respond(self._status_text(), parse_mode="html")
+        elif sub == "sources":
+            await event.answer()
+            await event.respond(self._sources_text(), parse_mode="html")
+        elif sub == "keywords":
+            await event.answer()
+            await event.respond(self._keywords_text())
+        elif sub == "stop":
+            self.storage.remove_subscriber(int(event.chat_id))
+            await event.answer("Отписан", alert=True)
+        else:
+            await event.answer("Неизвестный пункт меню")
+
+    async def _handle_draft_request(self, lead_id: int, *, chat_id: int, force: bool) -> None:
+        if not force:
+            cached = self.storage.get_draft(lead_id)
+            if cached is not None:
+                await self.bot_client.send_message(
+                    chat_id,
+                    format_draft(lead_id, cached["body"], version=cached["version"]),
+                    parse_mode="html",
+                    link_preview=False,
+                    buttons=draft_buttons(lead_id),
+                )
+                return
+
+        lead = self.storage.get_lead_with_classification(lead_id)
+        if lead is None:
+            await self.bot_client.send_message(chat_id, f"Лид #{lead_id} не найден.")
+            return
+
+        classification = None
+        if lead.get("priority") is not None:
+            classification = Classification(
+                is_match=bool(lead["is_match"]),
+                priority=int(lead["priority"]),
+                task_type=lead.get("task_type"),
+                estimated_budget=lead.get("estimated_budget"),
+                urgency=lead.get("urgency") or "unknown",
+                stack_match=tuple(lead.get("stack_match") or []),
+                summary=lead.get("summary"),
+                raw={}, model="", tokens_used=0,
+            )
+
+        draft = await self.drafter.generate(lead["text"], classification)
+        if draft is None:
+            await self.bot_client.send_message(chat_id, "Не удалось сгенерировать. Попробуй ещё раз.")
+            return
+        version = self.storage.save_draft(
+            lead_id,
+            body=draft.body, kb_doc_ids=draft.kb_doc_ids,
+            model=draft.model, tokens_used=draft.tokens_used,
+        )
+        await self.bot_client.send_message(
+            chat_id,
+            format_draft(lead_id, draft.body, version=version),
+            parse_mode="html",
+            link_preview=False,
+            buttons=draft_buttons(lead_id),
+        )
+        LOGGER.info("Drafted reply for lead %s (v%s, %s tokens)", lead_id, version, draft.tokens_used)
+
+    def _status_text(self) -> str:
+        stats = self.storage.stats()
+        return (
+            "<b>Статус:</b>\n"
+            f"• источников: {len(self.sources)}\n"
+            f"• подписчиков: {stats['subscribers']}\n"
+            f"• лидов в базе: {stats['leads']}\n"
+            f"• ожидают повторной отправки: {stats['pending']}"
+        )
+
+    def _sources_text(self) -> str:
+        lines = [f"{idx}. {s.handle} — {s.title}" for idx, s in enumerate(self.sources, 1)]
+        return "<b>Активные источники:</b>\n" + "\n".join(lines)
+
+    def _keywords_text(self) -> str:
+        keyword_preview = ", ".join(list(KEYWORDS.keys())[:35])
+        stop_preview = ", ".join(STOP_WORDS[:35])
+        return f"Ключевые слова:\n{keyword_preview}\n\nСтоп-слова:\n{stop_preview}"
 
     async def _register_source_handlers(self) -> list[tuple[Source, object]]:
         active: list[tuple[Source, object]] = []
@@ -275,10 +351,13 @@ class LeadBot:
                 )
 
         body = format_lead(source, lead, classification=classification, lead_id=lead_id)
+        buttons = lead_buttons(lead_id, has_draft=False, link=link) if lead_id is not None else None
         delivered = False
         for chat_id in subscribers:
             try:
-                await self.bot_client.send_message(chat_id, body, parse_mode="html", link_preview=False)
+                await self.bot_client.send_message(
+                    chat_id, body, parse_mode="html", link_preview=False, buttons=buttons,
+                )
                 delivered = True
             except RPCError as exc:
                 LOGGER.warning("Could not deliver lead to %s: %s", chat_id, exc)
@@ -316,9 +395,12 @@ class LeadBot:
             tokens_used=draft.tokens_used,
         )
         body = format_draft(lead_id, draft.body, version=version)
+        buttons = draft_buttons(lead_id)
         for chat_id in subscribers:
             try:
-                await self.bot_client.send_message(chat_id, body, parse_mode="html", link_preview=False)
+                await self.bot_client.send_message(
+                    chat_id, body, parse_mode="html", link_preview=False, buttons=buttons,
+                )
             except RPCError as exc:
                 LOGGER.warning("Could not deliver draft to %s: %s", chat_id, exc)
         LOGGER.info("Drafted reply for lead %s (v%s, %s tokens)", lead_id, version, draft.tokens_used)
