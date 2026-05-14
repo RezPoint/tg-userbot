@@ -38,6 +38,7 @@ from .storage import LeadRecord, Storage
 
 
 DRAFT_PRIORITY_THRESHOLD = 6
+AUTO_SKIP_PRIORITY = 3
 TERMINAL = {"won", "lost", "skipped"}
 
 
@@ -513,6 +514,21 @@ class LeadBot:
                     model=classification.model,
                     tokens_used=classification.tokens_used,
                 )
+
+        if (
+            classification is not None
+            and lead_id is not None
+            and not classification.is_match
+            and classification.priority < AUTO_SKIP_PRIORITY
+        ):
+            self.storage.mark_notified(lead.source, lead.message_id)
+            self.storage.update_lead_status(lead_id, "skipped")
+            LOGGER.info(
+                "Auto-skip lead %s (%s, pri=%s): %s",
+                lead_id, classification.task_type, classification.priority,
+                (classification.summary or "")[:80],
+            )
+            return
 
         body = format_lead(source, lead, classification=classification, lead_id=lead_id)
         buttons = (
