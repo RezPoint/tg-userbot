@@ -130,6 +130,21 @@ def format_draft(lead_id: int, body: str, version: int = 1) -> str:
     )
 
 
+def format_inbound(
+    lead_id: int,
+    username: str,
+    text: str,
+    is_new_reply: bool,
+) -> str:
+    header = "💬 <b>Заказчик ответил</b>" if is_new_reply else "💬 <b>Новое сообщение</b>"
+    preview = truncate(text, limit=600) if text else "(вложение без текста)"
+    return (
+        f"{header} · лид <code>#{lead_id}</code>\n"
+        f"<b>От:</b> @{html.escape(username)}\n\n"
+        f"<blockquote>{html.escape(preview)}</blockquote>"
+    )
+
+
 CONTACT_RE = re.compile(
     r"(?P<username>@[A-Za-z0-9_]{5,32})|(?P<email>[\w.+-]+@[\w-]+\.[\w.-]+)|(?P<url>https?://\S+)"
 )

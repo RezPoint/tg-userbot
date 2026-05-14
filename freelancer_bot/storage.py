@@ -263,6 +263,24 @@ class Storage:
                 for r in cur.fetchall()
             ]
 
+    def find_active_lead_by_contact(self, username: str) -> dict | None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, status::text, contact_username
+                FROM leads
+                WHERE lower(contact_username) = lower(%s)
+                  AND status IN ('drafted', 'sent', 'replied')
+                ORDER BY status_changed_at DESC
+                LIMIT 1
+                """,
+                (username,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {"id": int(row[0]), "status": str(row[1]), "contact_username": row[2]}
+
     def funnel_counts(self) -> dict[str, int]:
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute(

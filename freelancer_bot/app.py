@@ -25,6 +25,7 @@ from .formatting import (
     extract_telegram_username,
     format_draft,
     format_funnel,
+    format_inbound,
     format_lead,
     lead_buttons,
     reply_keyboard,
@@ -78,6 +79,7 @@ class LeadBot:
             self.storage.add_subscriber(self.config.target_chat_id)
 
         active_sources = await self._register_source_handlers()
+        self._register_pm_handler()
         LOGGER.info("Monitoring %s Telegram sources", len(active_sources))
 
         if self.config.send_catch_up and self.config.catch_up_limit > 0:
@@ -328,6 +330,40 @@ class LeadBot:
         keyword_preview = ", ".join(list(KEYWORDS.keys())[:35])
         stop_preview = ", ".join(STOP_WORDS[:35])
         return f"Ключевые слова:\n{keyword_preview}\n\nСтоп-слова:\n{stop_preview}"
+
+    def _register_pm_handler(self) -> None:
+        @self.user_client.on(events.NewMessage(incoming=True))
+        async def on_pm(event: events.NewMessage.Event) -> None:
+            if not event.is_private:
+                return
+            sender = await event.get_sender()
+            username = getattr(sender, "username", None)
+            if not username:
+                return
+            lead = self.storage.find_active_lead_by_contact(username)
+            if lead is None:
+                return
+
+            prev_status = lead["status"]
+            is_new_reply = prev_status in ("drafted", "sent")
+            if is_new_reply:
+                self.storage.update_lead_status(lead["id"], "replied")
+
+            text = event.message.message or ""
+            body = format_inbound(lead["id"], username, text, is_new_reply=is_new_reply)
+            buttons = draft_buttons(lead["id"], status="replied", contact_username=username)
+
+            for chat_id in self.storage.subscribers():
+                try:
+                    await self.bot_client.send_message(
+                        chat_id, body, parse_mode="html", link_preview=False, buttons=buttons,
+                    )
+                except RPCError as exc:
+                    LOGGER.warning("Could not deliver inbound to %s: %s", chat_id, exc)
+            LOGGER.info(
+                "Inbound from @%s for lead %s (was=%s, new_reply=%s)",
+                username, lead["id"], prev_status, is_new_reply,
+            )
 
     async def _register_source_handlers(self) -> list[tuple[Source, object]]:
         active: list[tuple[Source, object]] = []
