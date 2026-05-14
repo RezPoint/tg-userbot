@@ -13,6 +13,32 @@ LOGGER = logging.getLogger("freelancer_bot.drafts")
 
 MODEL = "llama-3.3-70b-versatile"
 
+REPLY_SYSTEM_PROMPT = """Ты пишешь черновик ОТВЕТА заказчику в продолжающемся диалоге по фриланс-заказу от лица Артёма.
+
+Артём — Python-фрилансер, отвечает коротко, по-человечески, без канцелярита.
+Тон: дружелюбный, деловой. На «ты». Без «здравствуйте», «уважаемый», без эмоджи.
+
+Ты увидишь:
+1. Исходное ТЗ заказчика (то, на что Артём изначально откликнулся).
+2. Контекст об Артёме (релевантный опыт, ставки).
+3. Историю переписки (что Артём писал, что заказчик отвечал).
+4. Последнюю реплику заказчика — на неё надо ответить.
+
+Структура ответа (2-4 предложения, до 450 символов):
+- Если заказчик задал вопрос — ответь по сути, конкретно.
+- Если заказчик уточняет ТЗ — подтверди понимание и при необходимости задай 1 уточняющий вопрос.
+- Если заказчик готов работать — подтверди, предложи следующий шаг (договор, оплата, начало).
+- Если просит ставку — назови (1500 ₽/час, минимум 3000 ₽).
+
+Запрещено:
+- Списки и буллеты.
+- «Я являюсь», «могу предложить», «с уважением».
+- Повторять то, что уже сказано в предыдущих репликах.
+- Эмоджи.
+
+Верни ТОЛЬКО текст ответа, без префиксов и кавычек."""
+
+
 SYSTEM_PROMPT = """Ты пишешь черновик отклика на фриланс-заказ от лица Артёма.
 
 Артём — Python-фрилансер, пишет коротко, по-человечески, без пафоса и канцелярита.
@@ -104,6 +130,61 @@ class DraftGenerator:
         if not body:
             return None
 
+        return Draft(
+            body=body,
+            kb_doc_ids=[d.id for d in docs],
+            model=resp.model,
+            tokens_used=resp.usage.total_tokens if resp.usage else 0,
+        )
+
+    async def generate_reply(
+        self,
+        original_lead_text: str,
+        classification: Classification | None,
+        last_outbound: str | None,
+        conversation: list[dict],
+    ) -> Draft | None:
+        last_inbound = next(
+            (m["text"] for m in reversed(conversation) if m["direction"] == "inbound"),
+            "",
+        )
+        query = f"{last_inbound} {(classification.task_type if classification else '')}".strip()
+        docs = self._kb.search_relevant(query or original_lead_text[:500], top_k=3)
+        docs = [d for d in docs if d.similarity >= 0.5]
+        kb_block = "\n\n".join(f"[{d.kind} · {d.title}]\n{d.content}" for d in docs) or "(контекст пуст)"
+
+        history_lines: list[str] = []
+        if last_outbound:
+            history_lines.append(f"Артём (первый отклик): {last_outbound}")
+        for m in conversation:
+            role = "Заказчик" if m["direction"] == "inbound" else "Артём"
+            history_lines.append(f"{role}: {m['text']}")
+        history = "\n".join(history_lines) if history_lines else "(переписки ещё нет)"
+
+        user_msg = (
+            f"Контекст об Артёме:\n{kb_block}\n\n"
+            f"---\nИСХОДНОЕ ТЗ:\n{original_lead_text[:1500]}\n"
+            f"---\nИСТОРИЯ ПЕРЕПИСКИ:\n{history}\n"
+            f"---\nНапиши ответ на последнюю реплику заказчика."
+        )
+
+        try:
+            resp = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": REPLY_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.4,
+                max_tokens=350,
+            )
+        except Exception as e:
+            LOGGER.warning("Groq reply-draft failed: %s", e)
+            return None
+
+        body = (resp.choices[0].message.content or "").strip().strip('"').strip("«»").strip()
+        if not body:
+            return None
         return Draft(
             body=body,
             kb_doc_ids=[d.id for d in docs],

@@ -27,6 +27,7 @@ from .formatting import (
     format_funnel,
     format_inbound,
     format_lead,
+    format_reply_draft,
     lead_buttons,
     reply_keyboard,
 )
@@ -350,6 +351,12 @@ class LeadBot:
                 self.storage.update_lead_status(lead["id"], "replied")
 
             text = event.message.message or ""
+            self.storage.save_conversation_message(
+                lead["id"], "inbound", text,
+                tg_message_id=int(event.message.id),
+                tg_chat_id=int(event.chat_id),
+            )
+
             body = format_inbound(lead["id"], username, text, is_new_reply=is_new_reply)
             buttons = draft_buttons(lead["id"], status="replied", contact_username=username)
 
@@ -364,6 +371,54 @@ class LeadBot:
                 "Inbound from @%s for lead %s (was=%s, new_reply=%s)",
                 username, lead["id"], prev_status, is_new_reply,
             )
+
+            if self.drafter is not None:
+                await self._auto_reply_draft(lead["id"])
+
+    async def _auto_reply_draft(self, lead_id: int) -> None:
+        lead_full = self.storage.get_lead_with_classification(lead_id)
+        if lead_full is None:
+            return
+        classification = None
+        if lead_full.get("priority") is not None:
+            classification = Classification(
+                is_match=bool(lead_full["is_match"]),
+                priority=int(lead_full["priority"]),
+                task_type=lead_full.get("task_type"),
+                estimated_budget=lead_full.get("estimated_budget"),
+                urgency=lead_full.get("urgency") or "unknown",
+                stack_match=tuple(lead_full.get("stack_match") or []),
+                summary=lead_full.get("summary"),
+                raw={}, model="", tokens_used=0,
+            )
+        prior_draft = self.storage.get_draft(lead_id)
+        conversation = self.storage.get_conversation(lead_id)
+
+        reply = await self.drafter.generate_reply(
+            original_lead_text=lead_full["text"],
+            classification=classification,
+            last_outbound=prior_draft["body"] if prior_draft else None,
+            conversation=conversation,
+        )
+        if reply is None:
+            LOGGER.warning("Reply-draft generation returned empty for lead %s", lead_id)
+            return
+
+        body = format_reply_draft(lead_id, reply.body)
+        meta = self.storage.get_lead_meta(lead_id)
+        buttons = draft_buttons(
+            lead_id,
+            status="replied",
+            contact_username=meta.get("contact_username") if meta else None,
+        )
+        for chat_id in self.storage.subscribers():
+            try:
+                await self.bot_client.send_message(
+                    chat_id, body, parse_mode="html", link_preview=False, buttons=buttons,
+                )
+            except RPCError as exc:
+                LOGGER.warning("Could not deliver reply-draft to %s: %s", chat_id, exc)
+        LOGGER.info("Reply-draft for lead %s (%s tokens)", lead_id, reply.tokens_used)
 
     async def _register_source_handlers(self) -> list[tuple[Source, object]]:
         active: list[tuple[Source, object]] = []

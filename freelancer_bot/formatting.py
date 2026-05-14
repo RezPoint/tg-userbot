@@ -145,6 +145,13 @@ def format_inbound(
     )
 
 
+def format_reply_draft(lead_id: int, body: str, version: int = 1) -> str:
+    return (
+        f"<b>💭 Черновик ответа</b> · лид <code>#{lead_id}</code> · v{version}\n\n"
+        f"<pre>{html.escape(body)}</pre>"
+    )
+
+
 CONTACT_RE = re.compile(
     r"(?P<username>@[A-Za-z0-9_]{5,32})|(?P<email>[\w.+-]+@[\w-]+\.[\w.-]+)|(?P<url>https?://\S+)"
 )

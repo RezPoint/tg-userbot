@@ -263,6 +263,40 @@ class Storage:
                 for r in cur.fetchall()
             ]
 
+    def save_conversation_message(
+        self,
+        lead_id: int,
+        direction: str,
+        text: str,
+        tg_message_id: int | None = None,
+        tg_chat_id: int | None = None,
+    ) -> None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO conversation_messages
+                    (lead_id, direction, text, tg_message_id, tg_chat_id)
+                VALUES (%s, %s::msg_direction, %s, %s, %s)
+                """,
+                (lead_id, direction, text, tg_message_id, tg_chat_id),
+            )
+
+    def get_conversation(self, lead_id: int) -> list[dict]:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT direction::text, text, created_at
+                FROM conversation_messages
+                WHERE lead_id = %s
+                ORDER BY created_at ASC
+                """,
+                (lead_id,),
+            )
+            return [
+                {"direction": r[0], "text": r[1], "created_at": r[2]}
+                for r in cur.fetchall()
+            ]
+
     def find_active_lead_by_contact(self, username: str) -> dict | None:
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute(
