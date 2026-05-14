@@ -14,37 +14,113 @@ from .storage import LeadRecord
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
-def lead_buttons(lead_id: int, has_draft: bool, link: str | None) -> list[list[Button]]:
+def lead_buttons(
+    lead_id: int,
+    has_draft: bool,
+    link: str | None,
+    status: str = "new",
+    contact_username: str | None = None,
+) -> list[list[Button]]:
+    rows: list[list[Button]] = []
     row: list[Button] = []
     if has_draft:
         row.append(Button.inline("📄 Показать черновик", f"draft:{lead_id}".encode()))
         row.append(Button.inline("🔄 Перегенерировать", f"redraft:{lead_id}".encode()))
     else:
         row.append(Button.inline("✍️ Сгенерировать", f"draft:{lead_id}".encode()))
+    rows.append(row)
     second = [Button.inline("❌ Скрыть", f"hide:{lead_id}".encode())]
     if link:
         second.insert(0, Button.url("🔗 Открыть пост", link))
-    return [row, second]
+    rows.append(second)
+    rows.extend(status_buttons(lead_id, status, contact_username))
+    return rows
 
 
-def draft_buttons(lead_id: int) -> list[list[Button]]:
-    return [[
+def draft_buttons(
+    lead_id: int,
+    status: str = "drafted",
+    contact_username: str | None = None,
+) -> list[list[Button]]:
+    rows: list[list[Button]] = [[
         Button.inline("🔄 Ещё вариант", f"redraft:{lead_id}".encode()),
         Button.inline("❌ Скрыть", f"hidedraft:{lead_id}".encode()),
     ]]
+    rows.extend(status_buttons(lead_id, status, contact_username))
+    return rows
 
 
 BTN_STATUS = "📊 Статус"
 BTN_SOURCES = "📡 Источники"
 BTN_KEYWORDS = "🔑 Ключи"
+BTN_FUNNEL = "📋 Воронка"
 BTN_STOP = "🔕 Отписаться"
+
+STATUS_LABELS = {
+    "new": "🆕 новый",
+    "drafted": "✍️ черновик",
+    "sent": "📤 отправлен",
+    "replied": "💬 ответили",
+    "won": "🏆 выиграл",
+    "lost": "💔 проиграл",
+    "skipped": "⏭ пропущен",
+}
 
 
 def reply_keyboard() -> list[list[Button]]:
     return [
-        [Button.text(BTN_STATUS, resize=True), Button.text(BTN_SOURCES, resize=True)],
-        [Button.text(BTN_KEYWORDS, resize=True), Button.text(BTN_STOP, resize=True)],
+        [Button.text(BTN_STATUS, resize=True), Button.text(BTN_FUNNEL, resize=True)],
+        [Button.text(BTN_SOURCES, resize=True), Button.text(BTN_KEYWORDS, resize=True)],
+        [Button.text(BTN_STOP, resize=True)],
     ]
+
+
+def status_buttons(lead_id: int, status: str, contact_username: str | None) -> list[list[Button]]:
+    rows: list[list[Button]] = []
+    if contact_username:
+        rows.append([Button.url(f"💬 Чат с @{contact_username}", f"https://t.me/{contact_username}")])
+    if status in ("new", "drafted"):
+        rows.append([
+            Button.inline("✅ Отправлено", f"status:sent:{lead_id}".encode()),
+            Button.inline("⏭ Пропустить", f"status:skipped:{lead_id}".encode()),
+        ])
+    elif status == "sent":
+        rows.append([
+            Button.inline("💬 Получил ответ", f"status:replied:{lead_id}".encode()),
+            Button.inline("💔 Проиграл", f"status:lost:{lead_id}".encode()),
+        ])
+    elif status == "replied":
+        rows.append([
+            Button.inline("🏆 Выиграл", f"status:won:{lead_id}".encode()),
+            Button.inline("💔 Проиграл", f"status:lost:{lead_id}".encode()),
+        ])
+    return rows
+
+
+def format_funnel(items: list[dict], counts: dict[str, int]) -> str:
+    if not items:
+        active = counts.get("drafted", 0) + counts.get("sent", 0) + counts.get("replied", 0)
+        if active == 0:
+            return "<b>📋 Воронка пуста</b>\n\nКак появятся высокоприоритетные лиды — попадут сюда."
+        return f"<b>📋 Воронка пуста</b> (всего активных: {active})"
+
+    summary_parts = []
+    for status, label in [("drafted", "черновик"), ("sent", "отправлено"), ("replied", "ответили")]:
+        cnt = counts.get(status, 0)
+        if cnt:
+            summary_parts.append(f"{label}: {cnt}")
+    summary = " · ".join(summary_parts) if summary_parts else "—"
+
+    lines = [f"<b>📋 Воронка</b> · {summary}\n"]
+    for it in items:
+        label = STATUS_LABELS.get(it["status"], it["status"])
+        pri = f" · p{it['priority']}" if it.get("priority") is not None else ""
+        contact = f" · @{it['contact_username']}" if it.get("contact_username") else ""
+        summary_text = (it.get("summary") or it.get("task_type") or "—")[:60]
+        lines.append(
+            f"<code>#{it['id']}</code> · {label}{pri}{contact}\n  {html.escape(summary_text)}"
+        )
+    return "\n".join(lines)
 
 
 def format_draft(lead_id: int, body: str, version: int = 1) -> str:
@@ -73,6 +149,21 @@ def extract_contacts(text: str) -> tuple[str, ...]:
         if value not in contacts:
             contacts.append(value)
     return tuple(contacts[:8])
+
+
+USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{4,31})")
+
+
+def extract_telegram_username(text: str, exclude: set[str] | None = None) -> str | None:
+    exclude_lc = {x.lstrip("@").lower() for x in (exclude or set())}
+    for m in USERNAME_RE.finditer(text):
+        uname = m.group(1)
+        if uname.lower() in exclude_lc:
+            continue
+        if uname.lower().endswith("bot"):
+            continue
+        return uname
+    return None
 
 
 def format_lead(source: Source, lead: LeadRecord, classification=None, lead_id: int | None = None) -> str:

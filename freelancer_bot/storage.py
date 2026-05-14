@@ -12,6 +12,10 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+FUNNEL_STATUSES = ("drafted", "sent", "replied")
+TERMINAL_STATUSES = ("won", "lost", "skipped")
+
+
 @dataclass(frozen=True)
 class LeadRecord:
     source: str
@@ -191,6 +195,80 @@ class Storage:
                 "version": int(row[2]),
                 "updated_at": row[3],
             }
+
+    def update_lead_status(self, lead_id: int, status: str) -> None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE leads SET status = %s::lead_status, status_changed_at = %s
+                WHERE id = %s
+                """,
+                (status, utc_now(), lead_id),
+            )
+
+    def set_contact_username(self, lead_id: int, username: str | None) -> None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE leads SET contact_username = %s WHERE id = %s",
+                (username, lead_id),
+            )
+
+    def get_lead_status(self, lead_id: int) -> str | None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status FROM leads WHERE id = %s", (lead_id,))
+            row = cur.fetchone()
+            return str(row[0]) if row else None
+
+    def get_lead_meta(self, lead_id: int) -> dict | None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, source, status, contact_username, link, status_changed_at,
+                       (SELECT priority FROM classifications c WHERE c.lead_id = leads.id) AS priority,
+                       (SELECT summary FROM classifications c WHERE c.lead_id = leads.id) AS summary
+                FROM leads WHERE id = %s
+                """,
+                (lead_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "id": int(row[0]), "source": row[1], "status": str(row[2]),
+                "contact_username": row[3], "link": row[4],
+                "status_changed_at": row[5],
+                "priority": row[6], "summary": row[7],
+            }
+
+    def list_funnel(self, statuses: tuple[str, ...] = FUNNEL_STATUSES, limit: int = 30) -> list[dict]:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT l.id, l.source, l.status, l.contact_username, l.status_changed_at,
+                       c.priority, c.summary, c.task_type
+                FROM leads l
+                LEFT JOIN classifications c ON c.lead_id = l.id
+                WHERE l.status = ANY(%s::lead_status[])
+                ORDER BY l.status_changed_at DESC
+                LIMIT %s
+                """,
+                (list(statuses), limit),
+            )
+            return [
+                {
+                    "id": int(r[0]), "source": r[1], "status": str(r[2]),
+                    "contact_username": r[3], "status_changed_at": r[4],
+                    "priority": r[5], "summary": r[6], "task_type": r[7],
+                }
+                for r in cur.fetchall()
+            ]
+
+    def funnel_counts(self) -> dict[str, int]:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT status::text, count(*) FROM leads GROUP BY status"
+            )
+            return {row[0]: int(row[1]) for row in cur.fetchall()}
 
     def save_classification(
         self,

@@ -15,12 +15,16 @@ from .config import RuntimeConfig
 from .drafts import DraftGenerator
 from .filters import KEYWORDS, STOP_WORDS, match_text
 from .formatting import (
+    BTN_FUNNEL,
     BTN_KEYWORDS,
     BTN_SOURCES,
     BTN_STATUS,
     BTN_STOP,
+    STATUS_LABELS,
     draft_buttons,
+    extract_telegram_username,
     format_draft,
+    format_funnel,
     format_lead,
     lead_buttons,
     reply_keyboard,
@@ -32,6 +36,7 @@ from .storage import LeadRecord, Storage
 
 
 DRAFT_PRIORITY_THRESHOLD = 6
+TERMINAL = {"won", "lost", "skipped"}
 
 
 LOGGER = logging.getLogger("freelancer_bot")
@@ -122,6 +127,12 @@ class LeadBot:
             self.storage.remove_subscriber(int(event.chat_id))
             await event.respond("Отписан, клавиатура скрыта.", buttons=_Btn.clear())
 
+        @self.bot_client.on(events.NewMessage(pattern=f"^(?:/funnel|{BTN_FUNNEL})$"))
+        async def funnel_cmd(event: events.NewMessage.Event) -> None:
+            items = self.storage.list_funnel()
+            counts = self.storage.funnel_counts()
+            await event.respond(format_funnel(items, counts), parse_mode="html", link_preview=False)
+
         @self.bot_client.on(events.NewMessage(pattern=r"^/(?:re)?draft(?:\s+(\d+))?"))
         async def draft_cmd(event: events.NewMessage.Event) -> None:
             if self.drafter is None:
@@ -198,7 +209,42 @@ class LeadBot:
                 pass
             return
 
+        if action == "status":
+            await self._handle_status_callback(event, arg)
+            return
+
         await event.answer("Неизвестная команда")
+
+    async def _handle_status_callback(self, event: events.CallbackQuery.Event, arg: str) -> None:
+        new_status, _, lead_id_str = arg.partition(":")
+        try:
+            lead_id = int(lead_id_str)
+        except ValueError:
+            await event.answer("Неверный ID")
+            return
+        if new_status not in STATUS_LABELS:
+            await event.answer("Неизвестный статус")
+            return
+        self.storage.update_lead_status(lead_id, new_status)
+        meta = self.storage.get_lead_meta(lead_id)
+        await event.answer(f"{STATUS_LABELS[new_status]}")
+
+        new_buttons = draft_buttons(
+            lead_id,
+            status=new_status,
+            contact_username=meta.get("contact_username") if meta else None,
+        ) if new_status not in TERMINAL else []
+        try:
+            await event.edit(buttons=new_buttons or None)
+        except RPCError:
+            pass
+
+        if new_status in TERMINAL:
+            label = STATUS_LABELS[new_status]
+            try:
+                await event.respond(f"Лид <code>#{lead_id}</code>: {label}", parse_mode="html")
+            except RPCError:
+                pass
 
     async def _handle_draft_request(self, lead_id: int, *, chat_id: int, force: bool) -> None:
         if not force:
@@ -240,23 +286,38 @@ class LeadBot:
             body=draft.body, kb_doc_ids=draft.kb_doc_ids,
             model=draft.model, tokens_used=draft.tokens_used,
         )
+        meta = self.storage.get_lead_meta(lead_id)
+        cur_status = (meta.get("status") if meta else "drafted") or "drafted"
+        if cur_status == "new":
+            self.storage.update_lead_status(lead_id, "drafted")
+            cur_status = "drafted"
         await self.bot_client.send_message(
             chat_id,
             format_draft(lead_id, draft.body, version=version),
             parse_mode="html",
             link_preview=False,
-            buttons=draft_buttons(lead_id),
+            buttons=draft_buttons(
+                lead_id,
+                status=cur_status,
+                contact_username=meta.get("contact_username") if meta else None,
+            ),
         )
         LOGGER.info("Drafted reply for lead %s (v%s, %s tokens)", lead_id, version, draft.tokens_used)
 
     def _status_text(self) -> str:
         stats = self.storage.stats()
+        counts = self.storage.funnel_counts()
+        funnel_line = " · ".join(
+            f"{STATUS_LABELS.get(s, s)}: {c}"
+            for s, c in counts.items() if s != "new" and c > 0
+        ) or "—"
         return (
             "<b>Статус:</b>\n"
             f"• источников: {len(self.sources)}\n"
             f"• подписчиков: {stats['subscribers']}\n"
             f"• лидов в базе: {stats['leads']}\n"
-            f"• ожидают повторной отправки: {stats['pending']}"
+            f"• ожидают повторной отправки: {stats['pending']}\n"
+            f"• воронка: {funnel_line}"
         )
 
     def _sources_text(self) -> str:
@@ -327,10 +388,13 @@ class LeadBot:
             LOGGER.warning("Lead matched, but no subscribers are configured yet: %s", link)
             return
 
+        lead_id = self.storage.get_lead_id(lead.source, lead.message_id)
+        contact_username = extract_telegram_username(text, exclude={source.username})
+        if lead_id is not None and contact_username:
+            self.storage.set_contact_username(lead_id, contact_username)
+
         classification: Classification | None = None
-        lead_id: int | None = None
         if self.classifier is not None:
-            lead_id = self.storage.get_lead_id(lead.source, lead.message_id)
             classification = await self.classifier.classify(source.title, lead.text)
             if classification is not None and lead_id is not None:
                 self.storage.save_classification(
@@ -348,7 +412,13 @@ class LeadBot:
                 )
 
         body = format_lead(source, lead, classification=classification, lead_id=lead_id)
-        buttons = lead_buttons(lead_id, has_draft=False, link=link) if lead_id is not None else None
+        buttons = (
+            lead_buttons(
+                lead_id, has_draft=False, link=link,
+                status="new", contact_username=contact_username,
+            )
+            if lead_id is not None else None
+        )
         delivered = False
         for chat_id in subscribers:
             try:
@@ -391,8 +461,14 @@ class LeadBot:
             model=draft.model,
             tokens_used=draft.tokens_used,
         )
+        self.storage.update_lead_status(lead_id, "drafted")
+        meta = self.storage.get_lead_meta(lead_id)
         body = format_draft(lead_id, draft.body, version=version)
-        buttons = draft_buttons(lead_id)
+        buttons = draft_buttons(
+            lead_id,
+            status="drafted",
+            contact_username=meta.get("contact_username") if meta else None,
+        )
         for chat_id in subscribers:
             try:
                 await self.bot_client.send_message(
