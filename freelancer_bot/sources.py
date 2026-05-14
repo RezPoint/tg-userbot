@@ -21,7 +21,7 @@ class Source:
 
 SOURCES: list[Source] = [
     Source("@freelansim_ru", "Хабр Фриланс", "часто публикует подборки в категории боты и парсинг"),
-    Source("@apibot_tg", "BotAPI [Фриланс]", "узко про заказы на Telegram-ботов"),
+    Source("@apibot_tg", "BotAPI [Фриланс]", "не существует — выдумка Codex", enabled=False),
     Source("@digitaltender", "DIGITAL Tender", "крупный канал с digital-заказами и разработкой"),
     Source("@freelancetaverna", "Фриланс Таверна", "много удаленных задач и вакансий для разработчиков"),
     Source("@frilans", "Фриланс | Удаленная работа", "широкий фриланс-канал, фильтр режет нерелевантное"),
@@ -30,7 +30,7 @@ SOURCES: list[Source] = [
     Source("@search_zakaz", "Ищу Заказы", "агрегатор заказов, полезен для расширения выдачи"),
     Source("@FreeVacanciesIT", "IT Фриланс | Вакансии", "IT-разовая и проектная работа"),
     Source("@freelance_dev_work", "Kwork разработка и IT", "агрегатор Kwork-заказов по разработке"),
-    Source("@do_it_order", "Do IT - фриланс заказы", "агрегирует программирование и разработку"),
+    Source("@do_it_order", "Do IT - фриланс заказы", "не существует — выдумка Codex", enabled=False),
     Source("@pixeltechspec", "Pixel | Заказы для Тех-спецов", "проектные заказы для техспецов"),
     Source("@webfrl", "Web Freelance", "web/fullstack задачи, иногда боты и API"),
     Source("@workayte", "Работа в ИТ", "IT-вакансии и удаленные проектные задачи"),

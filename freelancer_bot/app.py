@@ -14,6 +14,7 @@ from telethon.tl.custom.message import Message
 from .config import RuntimeConfig
 from .filters import KEYWORDS, STOP_WORDS, match_text
 from .formatting import format_lead
+from .llm_classifier import LeadClassifier
 from .sources import Source, enabled_sources
 from .storage import LeadRecord, Storage
 
@@ -26,7 +27,8 @@ class LeadBot:
         self.config = config
         config.user_session_path.parent.mkdir(parents=True, exist_ok=True)
         config.bot_session_path.parent.mkdir(parents=True, exist_ok=True)
-        self.storage = Storage(config.database_path)
+        self.storage = Storage(config.supabase_dsn)
+        self.classifier = LeadClassifier(config.groq_api_key) if config.groq_api_key else None
         self.sources = enabled_sources()
         self.user_client = TelegramClient(
             str(config.user_session_path),
@@ -184,7 +186,26 @@ class LeadBot:
             LOGGER.warning("Lead matched, but no subscribers are configured yet: %s", link)
             return
 
-        body = format_lead(source, lead)
+        classification = None
+        if self.classifier is not None:
+            lead_id = self.storage.get_lead_id(lead.source, lead.message_id)
+            classification = await self.classifier.classify(source.title, lead.text)
+            if classification is not None and lead_id is not None:
+                self.storage.save_classification(
+                    lead_id,
+                    is_match=classification.is_match,
+                    priority=classification.priority,
+                    task_type=classification.task_type,
+                    estimated_budget=classification.estimated_budget,
+                    urgency=classification.urgency,
+                    stack_match=classification.stack_match,
+                    summary=classification.summary,
+                    raw=classification.raw,
+                    model=classification.model,
+                    tokens_used=classification.tokens_used,
+                )
+
+        body = format_lead(source, lead, classification=classification)
         delivered = False
         for chat_id in subscribers:
             try:

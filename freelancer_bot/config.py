@@ -35,6 +35,8 @@ class RuntimeConfig:
     catch_up_limit: int
     send_catch_up: bool
     log_level: str
+    supabase_dsn: str
+    groq_api_key: str
 
     @classmethod
     def from_env(cls) -> "RuntimeConfig":
@@ -75,4 +77,6 @@ class RuntimeConfig:
             catch_up_limit=max(0, int(os.getenv("CATCH_UP_LIMIT", "25"))),
             send_catch_up=_bool_env("SEND_CATCH_UP", True),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+            supabase_dsn=_first_env("SUPABASE_DSN", "DB_DSN", "DATABASE_URL"),
+            groq_api_key=_first_env("GROQ_API_KEY"),
         )
