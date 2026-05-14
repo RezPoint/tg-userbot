@@ -35,6 +35,7 @@ SOURCES: list[Source] = [
     Source("@webfrl", "Web Freelance", "web/fullstack задачи, иногда боты и API"),
     Source("@workayte", "Работа в ИТ", "IT-вакансии и удаленные проектные задачи"),
     Source("@FreelancehuntProjects", "Freelancehunt Projects", "лента проектов с биржи Freelancehunt"),
+    Source("@python_jobs", "Python — вакансии и аналитика", "приватный канал, требует approval модератора", enabled=False),
 ]
 
 

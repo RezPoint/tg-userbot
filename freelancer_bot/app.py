@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from telethon import TelegramClient, events
-from telethon.errors import RPCError
+from telethon.errors import RPCError, UserAlreadyParticipantError
 from telethon.tl.custom.message import Message
+from telethon.tl.functions.channels import JoinChannelRequest
 
 from .config import RuntimeConfig
 from .drafts import DraftGenerator
@@ -465,6 +466,14 @@ class LeadBot:
             except (ValueError, RPCError) as exc:
                 LOGGER.warning("Could not resolve %s: %s", source.handle, exc)
                 continue
+
+            try:
+                await self.user_client(JoinChannelRequest(entity))
+                LOGGER.info("Joined %s", source.handle)
+            except UserAlreadyParticipantError:
+                pass
+            except RPCError as exc:
+                LOGGER.warning("Could not join %s: %s", source.handle, exc)
 
             active.append((source, entity))
 
