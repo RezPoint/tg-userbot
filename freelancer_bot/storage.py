@@ -126,6 +126,72 @@ class Storage:
             row = cur.fetchone()
             return int(row[0]) if row else None
 
+    def get_lead_with_classification(self, lead_id: int) -> dict | None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT l.source, l.text, l.link, l.score,
+                       c.is_match, c.priority, c.task_type, c.estimated_budget,
+                       c.urgency, c.stack_match, c.summary
+                FROM leads l
+                LEFT JOIN classifications c ON c.lead_id = l.id
+                WHERE l.id = %s
+                """,
+                (lead_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "source": row[0], "text": row[1], "link": row[2], "score": row[3],
+                "is_match": row[4], "priority": row[5], "task_type": row[6],
+                "estimated_budget": row[7], "urgency": row[8],
+                "stack_match": list(row[9] or []), "summary": row[10],
+            }
+
+    def save_draft(
+        self,
+        lead_id: int,
+        *,
+        body: str,
+        kb_doc_ids: list[int],
+        model: str,
+        tokens_used: int,
+    ) -> int:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO drafts (lead_id, body, kb_doc_ids, model, tokens_used)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (lead_id) DO UPDATE SET
+                    body = EXCLUDED.body,
+                    kb_doc_ids = EXCLUDED.kb_doc_ids,
+                    model = EXCLUDED.model,
+                    tokens_used = EXCLUDED.tokens_used,
+                    version = drafts.version + 1,
+                    updated_at = now()
+                RETURNING version
+                """,
+                (lead_id, body, kb_doc_ids, model, tokens_used),
+            )
+            return int(cur.fetchone()[0])
+
+    def get_draft(self, lead_id: int) -> dict | None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT body, kb_doc_ids, version, updated_at FROM drafts WHERE lead_id = %s",
+                (lead_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "body": row[0],
+                "kb_doc_ids": list(row[1] or []),
+                "version": int(row[2]),
+                "updated_at": row[3],
+            }
+
     def save_classification(
         self,
         lead_id: int,

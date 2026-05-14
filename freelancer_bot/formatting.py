@@ -11,6 +11,15 @@ from .storage import LeadRecord
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
+
+def format_draft(lead_id: int, body: str, version: int = 1) -> str:
+    return (
+        f"<b>✍️ Черновик отклика</b> · лид <code>#{lead_id}</code> · v{version}\n\n"
+        f"<blockquote>{html.escape(body)}</blockquote>\n\n"
+        f"Перегенерировать: <code>/redraft {lead_id}</code>"
+    )
+
+
 CONTACT_RE = re.compile(
     r"(?P<username>@[A-Za-z0-9_]{5,32})|(?P<email>[\w.+-]+@[\w-]+\.[\w.-]+)|(?P<url>https?://\S+)"
 )
@@ -32,7 +41,7 @@ def extract_contacts(text: str) -> tuple[str, ...]:
     return tuple(contacts[:8])
 
 
-def format_lead(source: Source, lead: LeadRecord, classification=None) -> str:
+def format_lead(source: Source, lead: LeadRecord, classification=None, lead_id: int | None = None) -> str:
     contacts = extract_contacts(lead.text)
     contact_line = ", ".join(html.escape(item) for item in contacts) if contacts else "не найдены"
     keywords = ", ".join(html.escape(item) for item in lead.keywords[:8])
@@ -67,8 +76,9 @@ def format_lead(source: Source, lead: LeadRecord, classification=None) -> str:
             f"<b>📝 Резюме:</b> {summary}\n\n"
         )
 
+    id_suffix = f" · <code>#{lead_id}</code>" if lead_id is not None else ""
     return (
-        f"<b>{header_emoji} Новый лид</b> · keyword-score {lead.score}\n"
+        f"<b>{header_emoji} Новый лид</b> · keyword-score {lead.score}{id_suffix}\n"
         f"<b>Источник:</b> {html.escape(source.title)} ({html.escape(source.handle)})\n"
         f"<b>Дата:</b> {html.escape(date_text)}\n"
         f"{llm_block}"
