@@ -14,7 +14,17 @@ from telethon.tl.custom.message import Message
 from .config import RuntimeConfig
 from .drafts import DraftGenerator
 from .filters import KEYWORDS, STOP_WORDS, match_text
-from .formatting import draft_buttons, format_draft, format_lead, lead_buttons, menu_buttons
+from .formatting import (
+    BTN_KEYWORDS,
+    BTN_SOURCES,
+    BTN_STATUS,
+    BTN_STOP,
+    draft_buttons,
+    format_draft,
+    format_lead,
+    lead_buttons,
+    reply_keyboard,
+)
 from .knowledge_base import KnowledgeBase
 from .llm_classifier import Classification, LeadClassifier
 from .sources import Source, enabled_sources
@@ -76,6 +86,8 @@ class LeadBot:
         self.storage.close()
 
     def _register_bot_commands(self) -> None:
+        from telethon import Button as _Btn
+
         @self.bot_client.on(events.NewMessage(pattern=r"^/start"))
         async def start(event: events.NewMessage.Event) -> None:
             chat_id = int(event.chat_id)
@@ -83,27 +95,32 @@ class LeadBot:
             await event.respond(
                 "Готово. Этот чат подписан на лиды.\n\n"
                 f"Chat ID: <code>{chat_id}</code>\n"
-                "Под каждым лидом — кнопки для черновика. Меню снизу.",
+                "Снизу — клавиатура с разделами. Под каждым лидом — кнопки для черновика.",
                 parse_mode="html",
-                buttons=menu_buttons(),
+                buttons=reply_keyboard(),
             )
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/stop"))
         async def stop(event: events.NewMessage.Event) -> None:
             self.storage.remove_subscriber(int(event.chat_id))
-            await event.respond("Ок, этот чат отписан от уведомлений.")
+            await event.respond("Ок, этот чат отписан от уведомлений.", buttons=_Btn.clear())
 
-        @self.bot_client.on(events.NewMessage(pattern=r"^/status"))
+        @self.bot_client.on(events.NewMessage(pattern=f"^(?:/status|{BTN_STATUS})$"))
         async def status(event: events.NewMessage.Event) -> None:
             await event.respond(self._status_text(), parse_mode="html")
 
-        @self.bot_client.on(events.NewMessage(pattern=r"^/sources"))
+        @self.bot_client.on(events.NewMessage(pattern=f"^(?:/sources|{BTN_SOURCES})$"))
         async def sources(event: events.NewMessage.Event) -> None:
             await event.respond(self._sources_text(), parse_mode="html")
 
-        @self.bot_client.on(events.NewMessage(pattern=r"^/keywords"))
+        @self.bot_client.on(events.NewMessage(pattern=f"^(?:/keywords|{BTN_KEYWORDS})$"))
         async def keywords(event: events.NewMessage.Event) -> None:
             await event.respond(self._keywords_text())
+
+        @self.bot_client.on(events.NewMessage(pattern=f"^{BTN_STOP}$"))
+        async def stop_btn(event: events.NewMessage.Event) -> None:
+            self.storage.remove_subscriber(int(event.chat_id))
+            await event.respond("Отписан, клавиатура скрыта.", buttons=_Btn.clear())
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/(?:re)?draft(?:\s+(\d+))?"))
         async def draft_cmd(event: events.NewMessage.Event) -> None:
@@ -181,27 +198,7 @@ class LeadBot:
                 pass
             return
 
-        if action == "menu":
-            await self._handle_menu_callback(event, arg)
-            return
-
         await event.answer("Неизвестная команда")
-
-    async def _handle_menu_callback(self, event: events.CallbackQuery.Event, sub: str) -> None:
-        if sub == "status":
-            await event.answer()
-            await event.respond(self._status_text(), parse_mode="html")
-        elif sub == "sources":
-            await event.answer()
-            await event.respond(self._sources_text(), parse_mode="html")
-        elif sub == "keywords":
-            await event.answer()
-            await event.respond(self._keywords_text())
-        elif sub == "stop":
-            self.storage.remove_subscriber(int(event.chat_id))
-            await event.answer("Отписан", alert=True)
-        else:
-            await event.answer("Неизвестный пункт меню")
 
     async def _handle_draft_request(self, lead_id: int, *, chat_id: int, force: bool) -> None:
         if not force:

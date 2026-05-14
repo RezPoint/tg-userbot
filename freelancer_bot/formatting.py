@@ -34,16 +34,16 @@ def draft_buttons(lead_id: int) -> list[list[Button]]:
     ]]
 
 
-def menu_buttons() -> list[list[Button]]:
+BTN_STATUS = "📊 Статус"
+BTN_SOURCES = "📡 Источники"
+BTN_KEYWORDS = "🔑 Ключи"
+BTN_STOP = "🔕 Отписаться"
+
+
+def reply_keyboard() -> list[list[Button]]:
     return [
-        [
-            Button.inline("📊 Статус", b"menu:status"),
-            Button.inline("📡 Источники", b"menu:sources"),
-        ],
-        [
-            Button.inline("🔑 Ключи", b"menu:keywords"),
-            Button.inline("🔕 Отписаться", b"menu:stop"),
-        ],
+        [Button.text(BTN_STATUS, resize=True), Button.text(BTN_SOURCES, resize=True)],
+        [Button.text(BTN_KEYWORDS, resize=True), Button.text(BTN_STOP, resize=True)],
     ]
 
 
