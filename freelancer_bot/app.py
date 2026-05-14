@@ -228,6 +228,16 @@ class LeadBot:
         if new_status not in STATUS_LABELS:
             await event.answer("Неизвестный статус")
             return
+
+        if new_status == "sent":
+            draft = self.storage.get_draft(lead_id)
+            if draft is not None:
+                self.storage.save_conversation_message(
+                    lead_id, "outbound", draft["body"], is_sent=True,
+                )
+        elif new_status in TERMINAL:
+            self.storage.confirm_pending_outbound(lead_id)
+
         self.storage.update_lead_status(lead_id, new_status)
         meta = self.storage.get_lead_meta(lead_id)
         await event.answer(f"{STATUS_LABELS[new_status]}")
@@ -351,10 +361,12 @@ class LeadBot:
                 self.storage.update_lead_status(lead["id"], "replied")
 
             text = event.message.message or ""
+            self.storage.confirm_pending_outbound(lead["id"])
             self.storage.save_conversation_message(
                 lead["id"], "inbound", text,
                 tg_message_id=int(event.message.id),
                 tg_chat_id=int(event.chat_id),
+                is_sent=True,
             )
 
             body = format_inbound(lead["id"], username, text, is_new_reply=is_new_reply)
@@ -391,18 +403,18 @@ class LeadBot:
                 summary=lead_full.get("summary"),
                 raw={}, model="", tokens_used=0,
             )
-        prior_draft = self.storage.get_draft(lead_id)
         conversation = self.storage.get_conversation(lead_id)
 
         reply = await self.drafter.generate_reply(
             original_lead_text=lead_full["text"],
             classification=classification,
-            last_outbound=prior_draft["body"] if prior_draft else None,
             conversation=conversation,
         )
         if reply is None:
             LOGGER.warning("Reply-draft generation returned empty for lead %s", lead_id)
             return
+
+        self.storage.replace_pending_outbound(lead_id, reply.body)
 
         body = format_reply_draft(lead_id, reply.body)
         meta = self.storage.get_lead_meta(lead_id)

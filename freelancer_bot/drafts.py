@@ -141,7 +141,6 @@ class DraftGenerator:
         self,
         original_lead_text: str,
         classification: Classification | None,
-        last_outbound: str | None,
         conversation: list[dict],
     ) -> Draft | None:
         last_inbound = next(
@@ -154,8 +153,6 @@ class DraftGenerator:
         kb_block = "\n\n".join(f"[{d.kind} · {d.title}]\n{d.content}" for d in docs) or "(контекст пуст)"
 
         history_lines: list[str] = []
-        if last_outbound:
-            history_lines.append(f"Артём (первый отклик): {last_outbound}")
         for m in conversation:
             role = "Заказчик" if m["direction"] == "inbound" else "Артём"
             history_lines.append(f"{role}: {m['text']}")

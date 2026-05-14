@@ -270,24 +270,54 @@ class Storage:
         text: str,
         tg_message_id: int | None = None,
         tg_chat_id: int | None = None,
+        is_sent: bool = True,
     ) -> None:
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO conversation_messages
-                    (lead_id, direction, text, tg_message_id, tg_chat_id)
-                VALUES (%s, %s::msg_direction, %s, %s, %s)
+                    (lead_id, direction, text, tg_message_id, tg_chat_id, is_sent)
+                VALUES (%s, %s::msg_direction, %s, %s, %s, %s)
                 """,
-                (lead_id, direction, text, tg_message_id, tg_chat_id),
+                (lead_id, direction, text, tg_message_id, tg_chat_id, is_sent),
             )
 
-    def get_conversation(self, lead_id: int) -> list[dict]:
+    def replace_pending_outbound(self, lead_id: int, text: str) -> None:
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
+                DELETE FROM conversation_messages
+                WHERE lead_id = %s AND direction = 'outbound' AND is_sent = false
+                """,
+                (lead_id,),
+            )
+            cur.execute(
+                """
+                INSERT INTO conversation_messages (lead_id, direction, text, is_sent)
+                VALUES (%s, 'outbound', %s, false)
+                """,
+                (lead_id, text),
+            )
+
+    def confirm_pending_outbound(self, lead_id: int) -> int:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE conversation_messages SET is_sent = true
+                WHERE lead_id = %s AND direction = 'outbound' AND is_sent = false
+                """,
+                (lead_id,),
+            )
+            return cur.rowcount
+
+    def get_conversation(self, lead_id: int, only_sent: bool = True) -> list[dict]:
+        clause = " AND (direction = 'inbound' OR is_sent = true)" if only_sent else ""
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
                 SELECT direction::text, text, created_at
                 FROM conversation_messages
-                WHERE lead_id = %s
+                WHERE lead_id = %s {clause}
                 ORDER BY created_at ASC
                 """,
                 (lead_id,),
