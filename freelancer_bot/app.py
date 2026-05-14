@@ -27,6 +27,7 @@ from .formatting import (
     format_funnel,
     format_inbound,
     format_lead,
+    format_lead_card,
     format_reply_draft,
     lead_buttons,
     reply_keyboard,
@@ -136,6 +137,14 @@ class LeadBot:
             items = self.storage.list_funnel()
             counts = self.storage.funnel_counts()
             await event.respond(format_funnel(items, counts), parse_mode="html", link_preview=False)
+
+        @self.bot_client.on(events.NewMessage(pattern=r"^/lead(?:\s+(\d+))?"))
+        async def lead_cmd(event: events.NewMessage.Event) -> None:
+            raw_id = event.pattern_match.group(1)
+            if not raw_id:
+                await event.respond("Пришли так: <code>/lead 73</code>", parse_mode="html")
+                return
+            await self._send_lead_card(int(raw_id), chat_id=int(event.chat_id))
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/(?:re)?draft(?:\s+(\d+))?"))
         async def draft_cmd(event: events.NewMessage.Event) -> None:
@@ -259,6 +268,21 @@ class LeadBot:
                 await event.respond(f"Лид <code>#{lead_id}</code>: {label}", parse_mode="html")
             except RPCError:
                 pass
+
+    async def _send_lead_card(self, lead_id: int, *, chat_id: int) -> None:
+        lead = self.storage.get_lead_full(lead_id)
+        if lead is None:
+            await self.bot_client.send_message(chat_id, f"Лид #{lead_id} не найден.")
+            return
+        body = format_lead_card(lead)
+        buttons = draft_buttons(
+            lead_id,
+            status=lead["status"],
+            contact_username=lead.get("contact_username"),
+        )
+        await self.bot_client.send_message(
+            chat_id, body, parse_mode="html", link_preview=False, buttons=buttons,
+        )
 
     async def _handle_draft_request(self, lead_id: int, *, chat_id: int, force: bool) -> None:
         if not force:

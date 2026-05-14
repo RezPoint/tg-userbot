@@ -152,6 +152,66 @@ def format_reply_draft(lead_id: int, body: str, version: int = 1) -> str:
     )
 
 
+def _fmt_msk(dt) -> str:
+    if dt is None:
+        return "—"
+    try:
+        return dt.astimezone(MOSCOW_TZ).strftime("%d.%m %H:%M")
+    except (AttributeError, ValueError):
+        return str(dt)
+
+
+def format_lead_card(lead: dict) -> str:
+    status_label = STATUS_LABELS.get(lead["status"], lead["status"])
+    contact = f" · @{lead['contact_username']}" if lead.get("contact_username") else ""
+    header = f"<b>🗂 Лид <code>#{lead['id']}</code></b> · {status_label}{contact}"
+
+    msg_dt = _fmt_msk(lead.get("message_date"))
+    src_line = f"<b>Источник:</b> {html.escape(lead['source'])} · {msg_dt} МСК"
+
+    cls_block = ""
+    cls = lead.get("classification")
+    if cls and cls.get("priority") is not None:
+        match_emoji = "✅" if cls["is_match"] else "❌"
+        budget = (
+            f"{cls['estimated_budget']:,} ₽".replace(",", " ")
+            if cls.get("estimated_budget") else "не указан"
+        )
+        urgency_map = {"low": "🟢 низкая", "medium": "🟡 средняя", "high": "🔴 высокая", "unknown": "—"}
+        stack = ", ".join(html.escape(s) for s in (cls.get("stack_match") or [])) or "—"
+        summary = html.escape(cls["summary"]) if cls.get("summary") else "—"
+        cls_block = (
+            f"\n{match_emoji} <b>LLM:</b> приоритет <b>{cls['priority']}/10</b> · "
+            f"{html.escape(cls.get('task_type') or '—')}\n"
+            f"💰 {budget} · ⚡ {urgency_map.get(cls.get('urgency'), '—')} · 🛠 {stack}\n"
+            f"📝 {summary}"
+        )
+
+    text_preview = html.escape(truncate(lead.get("text") or "", limit=500))
+    tz_block = f"\n\n<b>ТЗ:</b>\n<blockquote>{text_preview}</blockquote>"
+
+    draft_block = ""
+    draft = lead.get("draft")
+    if draft and draft.get("body"):
+        body = html.escape(truncate(draft["body"], limit=600))
+        draft_block = f"\n\n<b>✍️ Черновик v{draft['version']}:</b>\n<blockquote>{body}</blockquote>"
+
+    conv_block = ""
+    msgs = lead.get("conversation") or []
+    visible = [m for m in msgs if m["direction"] == "inbound" or m.get("is_sent")]
+    if visible:
+        lines = []
+        for m in visible[-6:]:
+            who = "💬 Заказчик" if m["direction"] == "inbound" else "📤 Артём"
+            when = _fmt_msk(m.get("created_at"))
+            text = html.escape(truncate(m["text"], limit=240))
+            lines.append(f"<b>{who}</b> · {when}\n{text}")
+        suffix = "" if len(visible) <= 6 else f"  (показаны последние 6 из {len(visible)})"
+        conv_block = f"\n\n<b>📨 Переписка{suffix}:</b>\n" + "\n\n".join(lines)
+
+    return f"{header}\n{src_line}{cls_block}{tz_block}{draft_block}{conv_block}"
+
+
 CONTACT_RE = re.compile(
     r"(?P<username>@[A-Za-z0-9_]{5,32})|(?P<email>[\w.+-]+@[\w-]+\.[\w.-]+)|(?P<url>https?://\S+)"
 )

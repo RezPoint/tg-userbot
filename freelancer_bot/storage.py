@@ -213,6 +213,65 @@ class Storage:
                 (username, lead_id),
             )
 
+    def get_lead_full(self, lead_id: int) -> dict | None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT l.id, l.source, l.status::text, l.contact_username, l.link,
+                       l.status_changed_at, l.message_date, l.text, l.score, l.keywords,
+                       c.is_match, c.priority, c.task_type, c.estimated_budget,
+                       c.urgency, c.stack_match, c.summary,
+                       d.body, d.version, d.updated_at
+                FROM leads l
+                LEFT JOIN classifications c ON c.lead_id = l.id
+                LEFT JOIN drafts d ON d.lead_id = l.id
+                WHERE l.id = %s
+                """,
+                (lead_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+
+            cur.execute(
+                """
+                SELECT direction::text, text, created_at, is_sent
+                FROM conversation_messages
+                WHERE lead_id = %s
+                ORDER BY created_at ASC
+                """,
+                (lead_id,),
+            )
+            messages = [
+                {"direction": r[0], "text": r[1], "created_at": r[2], "is_sent": r[3]}
+                for r in cur.fetchall()
+            ]
+
+        return {
+            "id": int(row[0]),
+            "source": row[1],
+            "status": row[2],
+            "contact_username": row[3],
+            "link": row[4],
+            "status_changed_at": row[5],
+            "message_date": row[6],
+            "text": row[7],
+            "score": row[8],
+            "keywords": list(row[9] or []),
+            "classification": (
+                {
+                    "is_match": row[10], "priority": row[11], "task_type": row[12],
+                    "estimated_budget": row[13], "urgency": row[14],
+                    "stack_match": list(row[15] or []), "summary": row[16],
+                } if row[10] is not None else None
+            ),
+            "draft": (
+                {"body": row[17], "version": int(row[18]), "updated_at": row[19]}
+                if row[17] is not None else None
+            ),
+            "conversation": messages,
+        }
+
     def get_lead_status(self, lead_id: int) -> str | None:
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT status FROM leads WHERE id = %s", (lead_id,))
