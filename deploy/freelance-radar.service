@@ -1,0 +1,22 @@
+[Unit]
+Description=Freelance Radar — Telegram lead bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/github/freelance-radar
+EnvironmentFile=/root/github/freelance-radar/.env
+ExecStart=/root/github/freelance-radar/.venv/bin/python -m freelancer_bot
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=freelance-radar
+KillSignal=SIGTERM
+TimeoutStopSec=20
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

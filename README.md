@@ -164,6 +164,26 @@ nohup python -m freelancer_bot > bot.log 2>&1 &
 
 Для VPS лучше использовать `systemd`, Docker или process manager. Файлы `.env`, `sessions/` и `data/` должны оставаться приватными.
 
+### Systemd-сервис
+
+Юнит в `deploy/freelance-radar.service`:
+
+```bash
+sudo cp deploy/freelance-radar.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now freelance-radar
+```
+
+Управление:
+
+```bash
+sudo systemctl status freelance-radar
+sudo systemctl restart freelance-radar
+sudo journalctl -u freelance-radar -f
+```
+
+Сервис автоматически рестартится при падении (`Restart=always`, `RestartSec=10`) и стартует после ребута.
+
 ## Проверка
 
 ```bash
