@@ -33,7 +33,7 @@ BYBIT_NICK_RE = re.compile(r"🪪\s*\**\s*[Нн]ик(?:нейм)?\s*\**:?\s*([A-
 BYBIT_AUTO_USER_RE = re.compile(r"\bUser[0-9A-Za-z]{6,12}\b")
 # ФИО: 3+ слова с заглавной (русские/латиница), допускается одиночная буква-инициал
 FULL_NAME_RE = re.compile(
-    r"\b([А-ЯЁA-Z][А-ЯЁа-яёa-zA-Z\-]{1,}(?:\s+[А-ЯЁA-Z](?:[А-ЯЁа-яёa-zA-Z\-]{1,}|\.))(?:\s+[А-ЯЁA-Z](?:[А-ЯЁа-яёa-zA-Z\-]{1,}|\.)){0,3})\b",
+    r"\b([А-ЯЁA-Z][А-ЯЁа-яёa-zA-Z\-]{2,}(?:\s+[А-ЯЁA-Z](?:[А-ЯЁа-яёa-zA-Z\-]{2,}|\.))(?:\s+[А-ЯЁA-Z](?:[А-ЯЁа-яёa-zA-Z\-]{2,}|\.)){0,3})\b",
 )
 USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{3,31})")
 REPORTER_LINE_RE = re.compile(
@@ -210,7 +210,7 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     cleaned = re.sub(r"[🆔🪪⏺️⭐🥷*️⃣][^\n]*", "", cleaned)
     # Шаблонные лейблы P2P_BlackList без эмодзи
     cleaned = re.sub(
-        r"(?:Telegram\s+(?:ID|Username)|Биржа|UID|Никнейм|Никн?:|Ник)\s*:?[^\n]*",
+        r"(?:Telegram\s+(?:ID|Username)|Биржа|UID|Никнейм|Никн?:|Ник|Тг|Tg|Телеграм|Реквизит[ы]?|Реки)\s*:?[^\n]*",
         "",
         cleaned,
         flags=re.IGNORECASE,
