@@ -27,11 +27,11 @@ MEXC_UID_RE = re.compile(r"mexc\.com/[^/]+/p2p/profile/(\w+)", re.IGNORECASE)
 ACCOUNT_SHORT_RE = re.compile(r"[Рр]еквизит[ы]?\s*:?\s*(\d{10,12})(?!\d)")
 # «🆔 UID: 502905147» — числовой Bybit/MEXC UID
 BYBIT_UID_NUM_RE = re.compile(r"🆔\s*\**\s*UID\s*\**:?\s*(\d{6,12})(?!\d)")
-# «🪪Никнейм: Matvey_BB» — отображаемое имя на Bybit
-BYBIT_NICK_RE = re.compile(r"🪪\s*\**\s*[Нн]ик(?:нейм)?\s*\**:?\s*([A-Za-z][A-Za-z0-9_.-]{2,32})")
-# «Bombilooo (UID 576902331)» — никнейм с числовым UID в скобках
+# «🪪Никнейм: Matvey_BB» — отображаемое имя на Bybit (минимум 4 символа)
+BYBIT_NICK_RE = re.compile(r"🪪\s*\**\s*[Нн]ик(?:нейм)?\s*\**:?\s*([A-Za-z][A-Za-z0-9_.-]{3,32})")
+# «Bombilooo (UID 576902331)» — никнейм с числовым UID в скобках (мин 4)
 BYBIT_NICK_UID_RE = re.compile(
-    r"\b([A-Za-z][A-Za-z0-9_.-]{2,32})\s*\(\s*UID\s+(\d{6,12})\s*\)",
+    r"\b([A-Za-z][A-Za-z0-9_.-]{3,32})\s*\(\s*UID\s+(\d{6,12})\s*\)",
     re.IGNORECASE,
 )
 # auto-сгенерированный Bybit-username вида «User1234ABCD»
@@ -195,6 +195,9 @@ def extract(text: str) -> Extracted:
         # отсечь CAPS-фразы из текста жалобы по stop-words
         words_upper = {w.upper() for w in v.split()}
         if words_upper & NAME_STOPWORDS:
+            continue
+        # отсечь явный мусор: слишком длинный (> 60 символов) или содержит подряд > 3 пробелов
+        if len(v) > 60 or "    " in v:
             continue
         seen_fn.add(low)
         names.append(v)
