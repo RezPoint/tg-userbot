@@ -250,9 +250,9 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     # Внимание: emoji *️⃣ содержит ASCII '*' в charset — обрабатываем отдельно.
     cleaned = re.sub(r"[🆔🪪⏺️⭐🥷][^\n]*", "", cleaned)
     cleaned = re.sub(r"\*️⃣[^\n]*", "", cleaned)
-    # Шаблонные лейблы P2P_BlackList без эмодзи
+    # Шаблонные лейблы P2P_BlackList — ловим только в начале строки, чтобы не съесть «ник» из «мошенник»
     cleaned = re.sub(
-        r"(?:Telegram\s+(?:ID|Username)|Биржа|UID|Никнейм|Никн?:|Ник|Тг|Tg|Телеграм|Реквизит[ы]?|Реки|Юзернейм|Username|HTX\s+INFO|TradeCode|by\s+TradeCode)\s*:?[^\n]*",
+        r"(?m)^\s*(?:Telegram\s+(?:ID|Username)|Биржа|UID|Никнейм|Никн?:|Ник|Тг|Tg|Телеграм|Реквизит[ы]?|Реки|Юзернейм|Username|HTX\s+INFO|TradeCode|by\s+TradeCode)\b\s*:?[^\n]*",
         "",
         cleaned,
         flags=re.IGNORECASE,
