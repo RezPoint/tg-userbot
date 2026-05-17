@@ -149,11 +149,17 @@ def extract(text: str) -> Extracted:
         if v not in seen_m:
             seen_m.add(v); mexc.append(v)
 
+    # 10-значные «реквизиты»; отсекаем если это просто хвост уже распознанного телефона/карты
+    phone_tails = {p.lstrip("+")[-10:] for p in phones}
+    card_tails = {c[-10:] for c in cards}
     accs, seen_a = [], set()
     for m in ACCOUNT_SHORT_RE.finditer(clean):
         v = m.group(1)
-        if v not in seen_a:
-            seen_a.add(v); accs.append(v)
+        if v in phone_tails or v in card_tails:
+            continue
+        if v in seen_a:
+            continue
+        seen_a.add(v); accs.append(v)
 
     nicks, seen_n = [], set()
     for m in BYBIT_NICK_RE.finditer(raw):
