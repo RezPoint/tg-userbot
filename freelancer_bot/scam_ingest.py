@@ -34,8 +34,12 @@ BYBIT_NICK_UID_RE = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_.-]{3,32})\s*\(\s*UID\s+(\d{6,12})\s*\)",
     re.IGNORECASE,
 )
-# auto-сгенерированный Bybit-username вида «User1234ABCD»
+# auto-сгенерированный Bybit-username вида «User1234ABCD» или просто «User» как остаток
 BYBIT_AUTO_USER_RE = re.compile(r"\bUser[0-9A-Za-z]{6,12}\b")
+# одиночный «User» — остаток шаблона «User @xxx» после чистки @
+BARE_USER_RE = re.compile(r"\bUser\b")
+# bare URL без протокола: «dammisa396.com»
+BARE_URL_RE = re.compile(r"\b[\w-]+\.(?:com|ru|net|org|io|app|me|xyz|info|biz|co|cc|club|store|site|online|tech)\b", re.IGNORECASE)
 # ФИО: имя ≥3 символов, далее ≥1 слово ≥3 символов или инициал (одна заглавная с/без точки)
 _WORD = r"[А-ЯЁа-яёa-zA-Z\-]{2,}"  # хвост слова после первой буквы (≥2 → итого ≥3)
 _INITIAL = r"\.?"  # одна буква, опционально с точкой
@@ -242,13 +246,15 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     cleaned = re.sub(r"\*️⃣[^\n]*", "", cleaned)
     # Шаблонные лейблы P2P_BlackList без эмодзи
     cleaned = re.sub(
-        r"(?:Telegram\s+(?:ID|Username)|Биржа|UID|Никнейм|Никн?:|Ник|Тг|Tg|Телеграм|Реквизит[ы]?|Реки)\s*:?[^\n]*",
+        r"(?:Telegram\s+(?:ID|Username)|Биржа|UID|Никнейм|Никн?:|Ник|Тг|Tg|Телеграм|Реквизит[ы]?|Реки|Юзернейм|Username|HTX\s+INFO|TradeCode|by\s+TradeCode)\s*:?[^\n]*",
         "",
         cleaned,
         flags=re.IGNORECASE,
     )
-    # Auto-Bybit юзернеймы (User0323G8HKHt) — это мусор, реальные ники в bybit_nickname
+    # Auto-Bybit юзернеймы (User0323G8HKHt) и одиночный «User»
     cleaned = BYBIT_AUTO_USER_RE.sub("", cleaned)
+    cleaned = BARE_USER_RE.sub("", cleaned)
+    cleaned = BARE_URL_RE.sub("", cleaned)
     # Вычищаем длинные цифровые последовательности в одной строке (телефоны, карты, UID).
     # Внимание: не пересекать \n чтобы не съесть число из следующей строки («1 лицо», «3 лицо»).
     cleaned = re.sub(r"(?:\+?\d[ \t\-()]*){10,}", "", cleaned)
@@ -264,6 +270,8 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     # Двойные/тройные пунктуации
     cleaned = re.sub(r"[,;:.]{2,}", ",", cleaned)
     cleaned = re.sub(r"[\s⠀]+", " ", cleaned).strip(" ,.;:-")
+    # Убрать обрезки в конце (отдельные слова из 1-2 букв после пробела)
+    cleaned = re.sub(r"\s+\S{1,2}$", "", cleaned).strip(" ,.;:-")
     return cleaned[:400] or "Скам в P2P (Bybit/MEXC)"
 
 
