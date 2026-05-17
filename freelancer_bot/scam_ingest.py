@@ -23,6 +23,8 @@ CARD_RE = re.compile(r"(?<!\d)(?:\d[\s-]?){13,18}\d(?!\d)")
 PHONE_RE = re.compile(r"(?:\+?7|8)[\s\-(]*9\d{2}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}")
 BYBIT_UID_RE = re.compile(r"bybit\.com/[^/]+/p2p/profile/(s[0-9a-f]+)", re.IGNORECASE)
 MEXC_UID_RE = re.compile(r"mexc\.com/[^/]+/p2p/profile/(\w+)", re.IGNORECASE)
+# «⏺️ Реквизит: 9203041024» или «Реквизит: 9203041024» — 10–12 цифр без BIN.
+ACCOUNT_SHORT_RE = re.compile(r"[Рр]еквизит[ы]?\s*:?\s*(\d{10,12})(?!\d)")
 USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{3,31})")
 REPORTER_LINE_RE = re.compile(
     r"(?:🥷\s*)?(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*@[A-Za-z0-9_]+",
@@ -73,6 +75,7 @@ class Extracted:
     cards: list[str]
     bybit_uids: list[str]
     mexc_uids: list[str]
+    account_shorts: list[str]
 
 
 def extract(text: str) -> Extracted:
@@ -113,7 +116,13 @@ def extract(text: str) -> Extracted:
         if v not in seen_m:
             seen_m.add(v); mexc.append(v)
 
-    return Extracted(usernames=usernames, phones=phones, cards=cards, bybit_uids=bybit, mexc_uids=mexc)
+    accs, seen_a = [], set()
+    for m in ACCOUNT_SHORT_RE.finditer(clean):
+        v = m.group(1)
+        if v not in seen_a:
+            seen_a.add(v); accs.append(v)
+
+    return Extracted(usernames=usernames, phones=phones, cards=cards, bybit_uids=bybit, mexc_uids=mexc, account_shorts=accs)
 
 
 async def _resolve(client: TelegramClient, username: str) -> int | None:
@@ -192,6 +201,7 @@ async def _store(
                 ("card", extracted.cards),
                 ("bybit_uid", extracted.bybit_uids),
                 ("mexc_uid", extracted.mexc_uids),
+                ("account_short", extracted.account_shorts),
             ):
                 for v in values:
                     await cur.execute(
@@ -213,7 +223,7 @@ async def _process_message(client: TelegramClient, dsn: str, msg, category: str 
     if not text:
         return
     ext = extract(text)
-    if not (ext.usernames or ext.phones or ext.cards or ext.bybit_uids or ext.mexc_uids):
+    if not (ext.usernames or ext.phones or ext.cards or ext.bybit_uids or ext.mexc_uids or ext.account_shorts):
         return
 
     resolved: dict[str, int | None] = {}
