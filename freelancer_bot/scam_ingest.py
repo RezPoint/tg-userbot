@@ -143,6 +143,7 @@ async def _store(
     source_url: str,
     raw_text: str,
     resolved: dict[str, int | None],
+    category: str = "general",
 ) -> int:
     summary = _summary_from_post(raw_text)
     written = 0
@@ -155,15 +156,16 @@ async def _store(
                     continue
                 await cur.execute(
                     """
-                    INSERT INTO scam_blacklist (target_tg_id, target_username, reason, source_chat_id, source_msg_id)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO scam_blacklist (target_tg_id, target_username, reason, source_chat_id, source_msg_id, category)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (target_tg_id) DO UPDATE
                     SET target_username = EXCLUDED.target_username,
                         source_chat_id  = COALESCE(scam_blacklist.source_chat_id, EXCLUDED.source_chat_id),
                         source_msg_id   = COALESCE(scam_blacklist.source_msg_id,  EXCLUDED.source_msg_id),
+                        category        = CASE WHEN scam_blacklist.category = 'general' THEN EXCLUDED.category ELSE scam_blacklist.category END,
                         votes = scam_blacklist.votes + 1
                     """,
-                    (tg_id, uname, summary, source_chat_id, source_msg_id),
+                    (tg_id, uname, summary, source_chat_id, source_msg_id, category),
                 )
                 written += 1
 
@@ -192,7 +194,7 @@ async def _store(
     return written
 
 
-async def _process_message(client: TelegramClient, dsn: str, msg) -> None:
+async def _process_message(client: TelegramClient, dsn: str, msg, category: str = "general") -> None:
     text = msg.text or msg.message or ""
     if not text:
         return
@@ -215,6 +217,7 @@ async def _process_message(client: TelegramClient, dsn: str, msg) -> None:
         source_url=_post_url(handle, msg.id),
         raw_text=text,
         resolved=resolved,
+        category=category,
     )
     LOG.info(
         "scam_ingest: чан=%s msg=%s usernames=%d phones=%d cards=%d uid=%d → %d записей",
@@ -223,34 +226,48 @@ async def _process_message(client: TelegramClient, dsn: str, msg) -> None:
     )
 
 
-def channels_from_env() -> list[str]:
+def channels_from_env() -> list[tuple[str, str]]:
+    """Парсит SKIBIDI_SCAM_INGEST_CHANNELS в список (channel, category).
+    Формат: `name:category` (через запятую). Если категория не указана — 'general'.
+    Пример: `P2P_BlackList:p2p,SomeOtherChan` → [('P2P_BlackList','p2p'), ('SomeOtherChan','general')]
+    """
     raw = os.environ.get("SKIBIDI_SCAM_INGEST_CHANNELS", "").strip()
-    return [c.strip().lstrip("@") for c in raw.split(",") if c.strip()]
+    out: list[tuple[str, str]] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" in item:
+            ch, cat = item.split(":", 1)
+            out.append((ch.strip().lstrip("@"), cat.strip() or "general"))
+        else:
+            out.append((item.lstrip("@"), "general"))
+    return out
 
 
 async def register_listeners(
     client: TelegramClient,
-    channels: Iterable[str],
+    channels: Iterable[tuple[str, str]],
     dsn: str,
     *,
     backfill_on_start: int = 0,
 ) -> None:
     chan_list = list(channels)
-    for ch in chan_list:
+    for ch, cat in chan_list:
         try:
             entity = await client.get_entity(ch)
         except Exception as e:  # noqa: BLE001
             LOG.warning("scam_ingest: не смог открыть @%s: %s", ch, e)
             continue
 
-        async def _handler(event, _dsn=dsn):
+        async def _handler(event, _dsn=dsn, _cat=cat):
             try:
-                await _process_message(client, _dsn, event.message)
+                await _process_message(client, _dsn, event.message, category=_cat)
             except Exception:  # noqa: BLE001
                 LOG.exception("scam_ingest: ошибка обработки сообщения")
 
         client.add_event_handler(_handler, events.NewMessage(chats=entity))
-        LOG.info("scam_ingest: подписан на @%s (id=%s)", ch, entity.id)
+        LOG.info("scam_ingest: подписан на @%s (id=%s, category=%s)", ch, entity.id, cat)
 
     if backfill_on_start > 0 and chan_list:
         async def _run_backfill():
@@ -262,19 +279,19 @@ async def register_listeners(
         LOG.info("scam_ingest: автобэкфилл запущен в фоне (limit=%d)", backfill_on_start)
 
 
-async def backfill(client: TelegramClient, channels: Iterable[str], dsn: str, limit: int = 200) -> None:
-    """Однократный backfill последних `limit` постов из каждого канала."""
-    for ch in channels:
+async def backfill(client: TelegramClient, channels: Iterable[tuple[str, str]], dsn: str, limit: int = 200) -> None:
+    """Однократный backfill последних `limit` постов из каждого канала с категорией."""
+    for ch, cat in channels:
         try:
             entity = await client.get_entity(ch)
         except Exception as e:  # noqa: BLE001
             LOG.warning("scam_ingest backfill: @%s — %s", ch, e)
             continue
-        LOG.info("scam_ingest backfill: @%s, последние %d постов", ch, limit)
+        LOG.info("scam_ingest backfill: @%s, последние %d постов (category=%s)", ch, limit, cat)
         n = 0
         async for msg in client.iter_messages(entity, limit=limit):
             try:
-                await _process_message(client, dsn, msg)
+                await _process_message(client, dsn, msg, category=cat)
                 n += 1
                 if n % 50 == 0:
                     LOG.info("scam_ingest backfill: @%s — прогресс %d/%d", ch, n, limit)
