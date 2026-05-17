@@ -29,11 +29,18 @@ ACCOUNT_SHORT_RE = re.compile(r"[Рр]еквизит[ы]?\s*:?\s*(\d{10,12})(?!\
 BYBIT_UID_NUM_RE = re.compile(r"🆔\s*\**\s*UID\s*\**:?\s*(\d{6,12})(?!\d)")
 # «🪪Никнейм: Matvey_BB» — отображаемое имя на Bybit
 BYBIT_NICK_RE = re.compile(r"🪪\s*\**\s*[Нн]ик(?:нейм)?\s*\**:?\s*([A-Za-z][A-Za-z0-9_.-]{2,32})")
+# «Bombilooo (UID 576902331)» — никнейм с числовым UID в скобках
+BYBIT_NICK_UID_RE = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_.-]{2,32})\s*\(\s*UID\s+(\d{6,12})\s*\)",
+    re.IGNORECASE,
+)
 # auto-сгенерированный Bybit-username вида «User1234ABCD»
 BYBIT_AUTO_USER_RE = re.compile(r"\bUser[0-9A-Za-z]{6,12}\b")
-# ФИО: 3+ слова с заглавной (русские/латиница), допускается одиночная буква-инициал
+# ФИО: имя ≥3 символов, далее ≥1 слово ≥3 символов или инициал (одна заглавная с/без точки)
+_WORD = r"[А-ЯЁa-zA-Z\-]{2,}"  # хвост слова после первой буквы (≥2 → итого ≥3)
+_INITIAL = r"\.?"  # одна буква, опционально с точкой
 FULL_NAME_RE = re.compile(
-    r"\b([А-ЯЁA-Z][А-ЯЁа-яёa-zA-Z\-]{2,}(?:\s+[А-ЯЁA-Z](?:[А-ЯЁа-яёa-zA-Z\-]{2,}|\.))(?:\s+[А-ЯЁA-Z](?:[А-ЯЁа-яёa-zA-Z\-]{2,}|\.)){0,3})\b",
+    rf"\b([А-ЯЁA-Z]{_WORD}(?:\s+[А-ЯЁA-Z](?:{_WORD}|{_INITIAL}))(?:\s+[А-ЯЁA-Z](?:{_WORD}|{_INITIAL})){{0,3}})\b",
 )
 USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{3,31})")
 REPORTER_LINE_RE = re.compile(
@@ -153,6 +160,13 @@ def extract(text: str) -> Extracted:
         v = m.group(1)
         if v not in seen_un:
             seen_un.add(v); uids_num.append(v)
+    # «Bombilooo (UID 576902331)» — пара ник+UID
+    for m in BYBIT_NICK_UID_RE.finditer(raw):
+        nick_v, uid_v = m.group(1), m.group(2)
+        if nick_v.lower() not in seen_n:
+            seen_n.add(nick_v.lower()); nicks.append(nick_v)
+        if uid_v not in seen_un:
+            seen_un.add(uid_v); uids_num.append(uid_v)
 
     # ФИО — ищем в очищенном тексте (без отправителя, ссылок и эмодзи-блоков)
     full_clean = REPORTER_LINE_RE.sub("", raw)
