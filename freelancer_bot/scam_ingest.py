@@ -252,7 +252,7 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     cleaned = re.sub(r"\*️⃣[^\n]*", "", cleaned)
     # Шаблонные лейблы P2P_BlackList — ловим только в начале строки, чтобы не съесть «ник» из «мошенник»
     cleaned = re.sub(
-        r"(?m)^\s*(?:Telegram\s+(?:ID|Username)|Биржа|UID|Никнейм|Никн?:|Ник|Тг|Tg|Телеграм|Реквизит[ы]?|Реки|Юзернейм|Username|HTX\s+INFO|TradeCode|by\s+TradeCode)\b\s*:?[^\n]*",
+        r"(?m)^\s*(?:Telegram\s+(?:ID|Username)|Биржа|UID|Никнейм|Никн?:|Ник|Тг|Tg|Телеграм|Реквизит[ы]?|Реки|Юзернейм|Username|HTX(?:\s+INFO)?|Bybit|MEXC|Binance|Huobi|OKX|TradeCode|by\s+TradeCode)\b\s*:?[^\n]*",
         "",
         cleaned,
         flags=re.IGNORECASE,
@@ -276,8 +276,12 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     # Двойные/тройные пунктуации
     cleaned = re.sub(r"[,;:.]{2,}", ",", cleaned)
     cleaned = re.sub(r"[\s⠀]+", " ", cleaned).strip(" ,.;:-")
-    # Убрать обрезки в конце (отдельные слова из 1-2 букв после пробела)
-    cleaned = re.sub(r"\s+\S{1,2}$", "", cleaned).strip(" ,.;:-")
+    # Убрать обрезки в конце (отдельные слова из 1-2 букв) — циклически
+    while True:
+        new = re.sub(r"\s+\S{1,2}$", "", cleaned).strip(" ,.;:-")
+        if new == cleaned:
+            break
+        cleaned = new
     return cleaned[:400] or "Скам в P2P (Bybit/MEXC)"
 
 
