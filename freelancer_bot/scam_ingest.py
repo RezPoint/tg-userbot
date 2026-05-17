@@ -216,8 +216,15 @@ def channels_from_env() -> list[str]:
     return [c.strip().lstrip("@") for c in raw.split(",") if c.strip()]
 
 
-async def register_listeners(client: TelegramClient, channels: Iterable[str], dsn: str) -> None:
-    for ch in channels:
+async def register_listeners(
+    client: TelegramClient,
+    channels: Iterable[str],
+    dsn: str,
+    *,
+    backfill_on_start: int = 0,
+) -> None:
+    chan_list = list(channels)
+    for ch in chan_list:
         try:
             entity = await client.get_entity(ch)
         except Exception as e:  # noqa: BLE001
@@ -232,6 +239,15 @@ async def register_listeners(client: TelegramClient, channels: Iterable[str], ds
 
         client.add_event_handler(_handler, events.NewMessage(chats=entity))
         LOG.info("scam_ingest: подписан на @%s (id=%s)", ch, entity.id)
+
+    if backfill_on_start > 0 and chan_list:
+        async def _run_backfill():
+            try:
+                await backfill(client, chan_list, dsn, limit=backfill_on_start)
+            except Exception:  # noqa: BLE001
+                LOG.exception("scam_ingest: автобэкфилл провалился")
+        asyncio.create_task(_run_backfill())
+        LOG.info("scam_ingest: автобэкфилл запущен в фоне (limit=%d)", backfill_on_start)
 
 
 async def backfill(client: TelegramClient, channels: Iterable[str], dsn: str, limit: int = 200) -> None:

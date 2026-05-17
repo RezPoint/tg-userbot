@@ -89,10 +89,13 @@ class LeadBot:
         from . import scam_ingest
         ingest_channels = scam_ingest.channels_from_env()
         if ingest_channels and self.config.supabase_dsn:
+            import os as _os
+            backfill_n = int(_os.environ.get("SKIBIDI_SCAM_INGEST_BACKFILL", "30"))
             await scam_ingest.register_listeners(
                 self.user_client, ingest_channels, self.config.supabase_dsn,
+                backfill_on_start=backfill_n,
             )
-            LOGGER.info("scam_ingest: live-режим на %d канал(ов)", len(ingest_channels))
+            LOGGER.info("scam_ingest: live-режим на %d канал(ов) + автобэкфилл %d постов", len(ingest_channels), backfill_n)
 
         if self.config.send_catch_up and self.config.catch_up_limit > 0:
             await self._catch_up(active_sources)
