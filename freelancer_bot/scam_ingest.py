@@ -130,7 +130,7 @@ def _summary_from_post(text: str) -> str:
     cleaned = REPORTER_LINE_RE.sub("", text or "")
     cleaned = re.sub(r"https?://\S+", "", cleaned)
     cleaned = re.sub(r"@[A-Za-z0-9_]+", "", cleaned)
-    cleaned = re.sub(r"🆔[^\n]*|🪪[^\n]*|⏺️[^\n]*|⭐[^\n]*|🥷[^\n]*|***️⃣[^\n]*", "", cleaned)
+    cleaned = re.sub(r"[🆔🪪⏺️⭐🥷*️⃣][^\n]*", "", cleaned)
     cleaned = re.sub(r"[\s⠀]+", " ", cleaned).strip()
     return cleaned[:400] or "Скам в P2P (Bybit/MEXC)"
 
@@ -276,6 +276,11 @@ async def backfill(client: TelegramClient, channels: Iterable[str], dsn: str, li
             try:
                 await _process_message(client, dsn, msg)
                 n += 1
+                if n % 50 == 0:
+                    LOG.info("scam_ingest backfill: @%s — прогресс %d/%d", ch, n, limit)
+            except FloodWaitError as e:
+                LOG.warning("scam_ingest backfill: FloodWait %ss, жду", e.seconds)
+                await asyncio.sleep(min(e.seconds, 300))
             except Exception:  # noqa: BLE001
                 LOG.exception("backfill error")
         LOG.info("scam_ingest backfill: @%s — обработано %d сообщений", ch, n)
