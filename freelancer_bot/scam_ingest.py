@@ -37,7 +37,7 @@ BYBIT_NICK_UID_RE = re.compile(
 # auto-сгенерированный Bybit-username вида «User1234ABCD»
 BYBIT_AUTO_USER_RE = re.compile(r"\bUser[0-9A-Za-z]{6,12}\b")
 # ФИО: имя ≥3 символов, далее ≥1 слово ≥3 символов или инициал (одна заглавная с/без точки)
-_WORD = r"[А-ЯЁa-zA-Z\-]{2,}"  # хвост слова после первой буквы (≥2 → итого ≥3)
+_WORD = r"[А-ЯЁа-яёa-zA-Z\-]{2,}"  # хвост слова после первой буквы (≥2 → итого ≥3)
 _INITIAL = r"\.?"  # одна буква, опционально с точкой
 FULL_NAME_RE = re.compile(
     rf"\b([А-ЯЁA-Z]{_WORD}(?:\s+[А-ЯЁA-Z](?:{_WORD}|{_INITIAL}))(?:\s+[А-ЯЁA-Z](?:{_WORD}|{_INITIAL})){{0,3}})\b",
