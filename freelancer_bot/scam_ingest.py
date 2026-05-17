@@ -31,6 +31,10 @@ BYBIT_UID_NUM_RE = re.compile(r"🆔\s*\**\s*UID\s*\**:?\s*(\d{6,12})(?!\d)")
 BYBIT_NICK_RE = re.compile(r"🪪\s*\**\s*[Нн]ик(?:нейм)?\s*\**:?\s*([A-Za-z][A-Za-z0-9_.-]{2,32})")
 # auto-сгенерированный Bybit-username вида «User1234ABCD»
 BYBIT_AUTO_USER_RE = re.compile(r"\bUser[0-9A-Za-z]{6,12}\b")
+# ФИО: 3+ слова с заглавной (русские/латиница), допускается одиночная буква-инициал
+FULL_NAME_RE = re.compile(
+    r"\b([А-ЯЁA-Z][А-ЯЁа-яёa-zA-Z\-]{1,}(?:\s+[А-ЯЁA-Z](?:[А-ЯЁа-яёa-zA-Z\-]{1,}|\.))(?:\s+[А-ЯЁA-Z](?:[А-ЯЁа-яёa-zA-Z\-]{1,}|\.)){0,3})\b",
+)
 USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{3,31})")
 REPORTER_LINE_RE = re.compile(
     r"(?:🥷\s*)?(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*@[A-Za-z0-9_]+",
@@ -84,6 +88,7 @@ class Extracted:
     account_shorts: list[str]
     bybit_nicknames: list[str]
     bybit_uids_numeric: list[str]
+    full_names: list[str]
 
 
 def extract(text: str) -> Extracted:
@@ -149,10 +154,29 @@ def extract(text: str) -> Extracted:
         if v not in seen_un:
             seen_un.add(v); uids_num.append(v)
 
+    # ФИО — ищем в очищенном тексте (без отправителя, ссылок и эмодзи-блоков)
+    full_clean = REPORTER_LINE_RE.sub("", raw)
+    full_clean = re.sub(r"https?://\S+", "", full_clean)
+    full_clean = re.sub(r"[🆔🪪⏺️⭐🥷*️⃣][^\n]*", "", full_clean)
+    full_clean = BYBIT_AUTO_USER_RE.sub("", full_clean)
+    names, seen_fn = [], set()
+    for m in FULL_NAME_RE.finditer(full_clean):
+        v = m.group(1).strip()
+        low = v.lower()
+        if low in seen_fn or low in {"скам в p2p", "скам ный", "скам в bybit"}:
+            continue
+        # отсечь явный мусор — слово «Скам» / «Скамер» / «Bybit» в начале
+        first = v.split()[0].lower()
+        if first in {"скам", "скамер", "скаммер", "bybit", "mexc", "telegram", "user"}:
+            continue
+        seen_fn.add(low)
+        names.append(v)
+
     return Extracted(
         usernames=usernames, phones=phones, cards=cards,
         bybit_uids=bybit, mexc_uids=mexc, account_shorts=accs,
         bybit_nicknames=nicks, bybit_uids_numeric=uids_num,
+        full_names=names,
     )
 
 
@@ -193,8 +217,9 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     )
     # Auto-Bybit юзернеймы (User0323G8HKHt) — это мусор, реальные ники в bybit_nickname
     cleaned = BYBIT_AUTO_USER_RE.sub("", cleaned)
-    # Вычищаем длинные цифровые последовательности (телефоны, карты, UID — они уже в credentials)
-    cleaned = re.sub(r"(?:\+?\d[\s\-()]*){10,}", "", cleaned)
+    # Вычищаем длинные цифровые последовательности в одной строке (телефоны, карты, UID).
+    # Внимание: не пересекать \n чтобы не съесть число из следующей строки («1 лицо», «3 лицо»).
+    cleaned = re.sub(r"(?:\+?\d[ \t\-()]*){10,}", "", cleaned)
     # Лишние символы форматирования
     cleaned = re.sub(r"\*+|#+|—", "", cleaned)
     # Балансировка скобок: убираем непарные ( и )
@@ -256,6 +281,7 @@ async def _store(
                 ("account_short", extracted.account_shorts),
                 ("bybit_nickname", extracted.bybit_nicknames),
                 ("bybit_uid_numeric", extracted.bybit_uids_numeric),
+                ("full_name", extracted.full_names),
             ):
                 for v in values:
                     await cur.execute(
@@ -280,6 +306,7 @@ async def _process_message(client: TelegramClient, dsn: str, msg, category: str 
     if not (
         ext.usernames or ext.phones or ext.cards or ext.bybit_uids or ext.mexc_uids
         or ext.account_shorts or ext.bybit_nicknames or ext.bybit_uids_numeric
+        or ext.full_names
     ):
         return
 
