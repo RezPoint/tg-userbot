@@ -175,8 +175,11 @@ def _post_url(channel_username: str, msg_id: int) -> str:
     return f"https://t.me/{channel_username}/{msg_id}"
 
 
-def _summary_from_post(text: str) -> str:
+def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     cleaned = REPORTER_LINE_RE.sub("", text or "")
+    for token in (also_strip or []):
+        if token and len(token) >= 3:
+            cleaned = re.sub(rf"\b{re.escape(token)}\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = MARKDOWN_LINK_RE.sub("", cleaned)
     cleaned = re.sub(r"https?://\S+", "", cleaned)
     cleaned = re.sub(r"@[A-Za-z0-9_]+", "", cleaned)
@@ -217,7 +220,7 @@ async def _store(
     resolved: dict[str, int | None],
     category: str = "general",
 ) -> int:
-    summary = _summary_from_post(raw_text)
+    summary = _summary_from_post(raw_text, also_strip=extracted.bybit_nicknames)
     written = 0
     async with await psycopg.AsyncConnection.connect(dsn) as conn:
         await conn.execute("SET search_path TO skibidi, public")
