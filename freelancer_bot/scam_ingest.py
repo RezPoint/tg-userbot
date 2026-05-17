@@ -25,6 +25,12 @@ BYBIT_UID_RE = re.compile(r"bybit\.com/[^/]+/p2p/profile/(s[0-9a-f]+)", re.IGNOR
 MEXC_UID_RE = re.compile(r"mexc\.com/[^/]+/p2p/profile/(\w+)", re.IGNORECASE)
 # «⏺️ Реквизит: 9203041024» или «Реквизит: 9203041024» — 10–12 цифр без BIN.
 ACCOUNT_SHORT_RE = re.compile(r"[Рр]еквизит[ы]?\s*:?\s*(\d{10,12})(?!\d)")
+# «🆔 UID: 502905147» — числовой Bybit/MEXC UID
+BYBIT_UID_NUM_RE = re.compile(r"🆔\s*\**\s*UID\s*\**:?\s*(\d{6,12})(?!\d)")
+# «🪪Никнейм: Matvey_BB» — отображаемое имя на Bybit
+BYBIT_NICK_RE = re.compile(r"🪪\s*\**\s*[Нн]ик(?:нейм)?\s*\**:?\s*([A-Za-z][A-Za-z0-9_.-]{2,32})")
+# auto-сгенерированный Bybit-username вида «User1234ABCD»
+BYBIT_AUTO_USER_RE = re.compile(r"\bUser[0-9A-Za-z]{6,12}\b")
 USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{3,31})")
 REPORTER_LINE_RE = re.compile(
     r"(?:🥷\s*)?(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*@[A-Za-z0-9_]+",
@@ -76,6 +82,8 @@ class Extracted:
     bybit_uids: list[str]
     mexc_uids: list[str]
     account_shorts: list[str]
+    bybit_nicknames: list[str]
+    bybit_uids_numeric: list[str]
 
 
 def extract(text: str) -> Extracted:
@@ -122,7 +130,30 @@ def extract(text: str) -> Extracted:
         if v not in seen_a:
             seen_a.add(v); accs.append(v)
 
-    return Extracted(usernames=usernames, phones=phones, cards=cards, bybit_uids=bybit, mexc_uids=mexc, account_shorts=accs)
+    nicks, seen_n = [], set()
+    for m in BYBIT_NICK_RE.finditer(raw):
+        v = m.group(1).strip()
+        if v in {"—", "-", "?"} or v.lower() in seen_n:
+            continue
+        seen_n.add(v.lower())
+        nicks.append(v)
+    # auto-юзернеймы Bybit (UserXXXX) тоже считаем bybit_nickname
+    for m in BYBIT_AUTO_USER_RE.finditer(raw):
+        v = m.group(0)
+        if v.lower() not in seen_n:
+            seen_n.add(v.lower()); nicks.append(v)
+
+    uids_num, seen_un = [], set()
+    for m in BYBIT_UID_NUM_RE.finditer(raw):
+        v = m.group(1)
+        if v not in seen_un:
+            seen_un.add(v); uids_num.append(v)
+
+    return Extracted(
+        usernames=usernames, phones=phones, cards=cards,
+        bybit_uids=bybit, mexc_uids=mexc, account_shorts=accs,
+        bybit_nicknames=nicks, bybit_uids_numeric=uids_num,
+    )
 
 
 async def _resolve(client: TelegramClient, username: str) -> int | None:
@@ -150,11 +181,22 @@ def _summary_from_post(text: str) -> str:
     cleaned = re.sub(r"https?://\S+", "", cleaned)
     cleaned = re.sub(r"@[A-Za-z0-9_]+", "", cleaned)
     cleaned = re.sub(r"[🆔🪪⏺️⭐🥷*️⃣][^\n]*", "", cleaned)
+    # Auto-Bybit юзернеймы (User0323G8HKHt) — это мусор, реальные ники в bybit_nickname
+    cleaned = BYBIT_AUTO_USER_RE.sub("", cleaned)
     # Вычищаем длинные цифровые последовательности (телефоны, карты, UID — они уже в credentials)
     cleaned = re.sub(r"(?:\+?\d[\s\-()]*){10,}", "", cleaned)
     # Лишние символы форматирования
-    cleaned = re.sub(r"\*+|#+", "", cleaned)
-    cleaned = re.sub(r"[\s⠀]+", " ", cleaned).strip(" ,.;:-—")
+    cleaned = re.sub(r"\*+|#+|—", "", cleaned)
+    # Балансировка скобок: убираем непарные ( и )
+    while cleaned.count(")") > cleaned.count("("):
+        cleaned = cleaned.replace(")", "", 1)
+    while cleaned.count("(") > cleaned.count(")"):
+        cleaned = cleaned.replace("(", "", 1)
+    # Убираем пустые скобки, появившиеся после чистки
+    cleaned = re.sub(r"\(\s*\)", "", cleaned)
+    # Двойные/тройные пунктуации
+    cleaned = re.sub(r"[,;:.]{2,}", ",", cleaned)
+    cleaned = re.sub(r"[\s⠀]+", " ", cleaned).strip(" ,.;:-")
     return cleaned[:400] or "Скам в P2P (Bybit/MEXC)"
 
 
@@ -202,6 +244,8 @@ async def _store(
                 ("bybit_uid", extracted.bybit_uids),
                 ("mexc_uid", extracted.mexc_uids),
                 ("account_short", extracted.account_shorts),
+                ("bybit_nickname", extracted.bybit_nicknames),
+                ("bybit_uid_numeric", extracted.bybit_uids_numeric),
             ):
                 for v in values:
                     await cur.execute(
@@ -223,7 +267,10 @@ async def _process_message(client: TelegramClient, dsn: str, msg, category: str 
     if not text:
         return
     ext = extract(text)
-    if not (ext.usernames or ext.phones or ext.cards or ext.bybit_uids or ext.mexc_uids or ext.account_shorts):
+    if not (
+        ext.usernames or ext.phones or ext.cards or ext.bybit_uids or ext.mexc_uids
+        or ext.account_shorts or ext.bybit_nicknames or ext.bybit_uids_numeric
+    ):
         return
 
     resolved: dict[str, int | None] = {}
