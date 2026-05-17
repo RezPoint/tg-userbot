@@ -42,6 +42,15 @@ _INITIAL = r"\.?"  # одна буква, опционально с точкой
 FULL_NAME_RE = re.compile(
     rf"\b([А-ЯЁA-Z]{_WORD}(?:\s+[А-ЯЁA-Z](?:{_WORD}|{_INITIAL}))(?:\s+[А-ЯЁA-Z](?:{_WORD}|{_INITIAL})){{0,3}})\b",
 )
+
+# Слова, наличие которых означает «это не ФИО, а кусок жалобы CAPS»
+NAME_STOPWORDS = frozenset({
+    "ОТПРАВЛЯЕТ", "ОТПРАВЛЯЮ", "ОТКАЗЫВАЕТСЯ", "ОТКАЗЫАЕТСЯ", "ИГНОРИТ", "ИГНОРИРУЕТ",
+    "ОТКАЗ", "СКАМ", "БАН", "СКАМЩИКА", "СКАМЩИК", "ВОПРОС", "ГРЯЗЬ", "СРАЗУ",
+    "РАБОТАТЬ", "ВЕРНУТЬ", "ОТДАТЬ", "ПЛАТИТЬ", "ПРИНЯТЬ", "ОТМЕНИТЬ", "ОТПРАВКА",
+    "РЕШАТЬ", "РЕШИТЬ", "СДЕЛАТЬ", "СДЕЛАЛ", "СКИДЫВАЕТ", "КИДАЕТ", "ВЫДАЛ",
+    "СКРЫВАЕТ", "СКРЫЛ", "ПРОПАЛ", "ИСЧЕЗ", "ТРЕБУЕТ",
+})
 USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{3,31})")
 REPORTER_LINE_RE = re.compile(
     r"(?:🥷\s*)?(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*@[A-Za-z0-9_]+",
@@ -183,6 +192,10 @@ def extract(text: str) -> Extracted:
         first = v.split()[0].lower()
         if first in {"скам", "скамер", "скаммер", "bybit", "mexc", "telegram", "user"}:
             continue
+        # отсечь CAPS-фразы из текста жалобы по stop-words
+        words_upper = {w.upper() for w in v.split()}
+        if words_upper & NAME_STOPWORDS:
+            continue
         seen_fn.add(low)
         names.append(v)
 
@@ -221,7 +234,9 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     cleaned = MARKDOWN_LINK_RE.sub("", cleaned)
     cleaned = re.sub(r"https?://\S+", "", cleaned)
     cleaned = re.sub(r"@[A-Za-z0-9_]+", "", cleaned)
-    cleaned = re.sub(r"[🆔🪪⏺️⭐🥷*️⃣][^\n]*", "", cleaned)
+    # Внимание: emoji *️⃣ содержит ASCII '*' в charset — обрабатываем отдельно.
+    cleaned = re.sub(r"[🆔🪪⏺️⭐🥷][^\n]*", "", cleaned)
+    cleaned = re.sub(r"\*️⃣[^\n]*", "", cleaned)
     # Шаблонные лейблы P2P_BlackList без эмодзи
     cleaned = re.sub(
         r"(?:Telegram\s+(?:ID|Username)|Биржа|UID|Никнейм|Никн?:|Ник|Тг|Tg|Телеграм|Реквизит[ы]?|Реки)\s*:?[^\n]*",
