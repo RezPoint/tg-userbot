@@ -86,6 +86,14 @@ class LeadBot:
         self._register_pm_handler()
         LOGGER.info("Monitoring %s Telegram sources", len(active_sources))
 
+        from . import scam_ingest
+        ingest_channels = scam_ingest.channels_from_env()
+        if ingest_channels and self.config.supabase_dsn:
+            await scam_ingest.register_listeners(
+                self.user_client, ingest_channels, self.config.supabase_dsn,
+            )
+            LOGGER.info("scam_ingest: live-режим на %d канал(ов)", len(ingest_channels))
+
         if self.config.send_catch_up and self.config.catch_up_limit > 0:
             await self._catch_up(active_sources)
 
@@ -161,6 +169,21 @@ class LeadBot:
                 chat_id=int(event.chat_id),
                 force=event.raw_text.startswith("/redraft"),
             )
+
+        @self.bot_client.on(events.NewMessage(pattern=r"^/scam_backfill(?:\s+(\d+))?"))
+        async def scam_backfill(event: events.NewMessage.Event) -> None:
+            from . import scam_ingest
+            chans = scam_ingest.channels_from_env()
+            if not chans or not self.config.supabase_dsn:
+                await event.respond("Backfill недоступен: SKIBIDI_SCAM_INGEST_CHANNELS или SUPABASE_DSN не заданы.")
+                return
+            limit = int(event.pattern_match.group(1) or 30)
+            await event.respond(f"Backfill стартовал: {len(chans)} канал(ов), по {limit} постов. Это может занять несколько минут.")
+            try:
+                await scam_ingest.backfill(self.user_client, chans, self.config.supabase_dsn, limit=limit)
+                await event.respond(f"✅ Backfill завершён, см. логи.")
+            except Exception as e:  # noqa: BLE001
+                await event.respond(f"❌ Ошибка backfill: {e}")
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/test(?:\s+(.+))?"))
         async def test_filter(event: events.NewMessage.Event) -> None:
