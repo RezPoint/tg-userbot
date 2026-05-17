@@ -126,6 +126,15 @@ def _post_url(channel_username: str, msg_id: int) -> str:
     return f"https://t.me/{channel_username}/{msg_id}"
 
 
+def _summary_from_post(text: str) -> str:
+    cleaned = REPORTER_LINE_RE.sub("", text or "")
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
+    cleaned = re.sub(r"@[A-Za-z0-9_]+", "", cleaned)
+    cleaned = re.sub(r"🆔[^\n]*|🪪[^\n]*|⏺️[^\n]*|⭐[^\n]*|🥷[^\n]*|***️⃣[^\n]*", "", cleaned)
+    cleaned = re.sub(r"[\s⠀]+", " ", cleaned).strip()
+    return cleaned[:400] or "Скам в P2P (Bybit/MEXC)"
+
+
 async def _store(
     dsn: str,
     extracted: Extracted,
@@ -135,6 +144,7 @@ async def _store(
     raw_text: str,
     resolved: dict[str, int | None],
 ) -> int:
+    summary = _summary_from_post(raw_text)
     written = 0
     async with await psycopg.AsyncConnection.connect(dsn) as conn:
         await conn.execute("SET search_path TO skibidi, public")
@@ -145,13 +155,15 @@ async def _store(
                     continue
                 await cur.execute(
                     """
-                    INSERT INTO scam_blacklist (target_tg_id, target_username, reason, public_chat_id, public_msg_id)
+                    INSERT INTO scam_blacklist (target_tg_id, target_username, reason, source_chat_id, source_msg_id)
                     VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (target_tg_id) DO UPDATE
                     SET target_username = EXCLUDED.target_username,
+                        source_chat_id  = COALESCE(scam_blacklist.source_chat_id, EXCLUDED.source_chat_id),
+                        source_msg_id   = COALESCE(scam_blacklist.source_msg_id,  EXCLUDED.source_msg_id),
                         votes = scam_blacklist.votes + 1
                     """,
-                    (tg_id, uname, f"Из канала-источника, см. {source_url}", source_chat_id, source_msg_id),
+                    (tg_id, uname, summary, source_chat_id, source_msg_id),
                 )
                 written += 1
 
