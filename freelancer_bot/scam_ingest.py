@@ -1,7 +1,7 @@
 """Парсер скам-каналов → запись в skibidi.scam_blacklist / scam_credentials.
 
 Подписывается на список каналов из env SKIBIDI_SCAM_INGEST_CHANNELS (через запятую),
-для каждого нового сообщения извлекает Telegram-username скаммеров, телефоны,
+для каждого нового сообщения извлекает Telegram-username скамеров, телефоны,
 номера карт, UID бирж. Резолвит username → tg_id через тот же user-Telethon,
 upsert в skibidi-схему.
 """
@@ -24,7 +24,14 @@ PHONE_RE = re.compile(r"(?:\+?7|8)[\s\-(]*9\d{2}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*
 BYBIT_UID_RE = re.compile(r"bybit\.com/[^/]+/p2p/profile/(s[0-9a-f]+)", re.IGNORECASE)
 MEXC_UID_RE = re.compile(r"mexc\.com/[^/]+/p2p/profile/(\w+)", re.IGNORECASE)
 USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{3,31})")
-REPORTER_LINE_RE = re.compile(r"🥷\s*[Оо]тправитель:?\s*@[A-Za-z0-9_]+")
+REPORTER_LINE_RE = re.compile(
+    r"(?:🥷\s*)?(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*@[A-Za-z0-9_]+",
+)
+REPORTER_USERNAME_RE = re.compile(
+    r"(?:🥷\s*)?(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*@([A-Za-z0-9_]+)",
+)
+MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\([^)]+\)")
+DIGITS_RE = re.compile(r"\d+(?:[\s\-.]*\d+)*")
 
 
 def _luhn_ok(d: str) -> bool:
@@ -69,13 +76,15 @@ class Extracted:
 
 
 def extract(text: str) -> Extracted:
-    clean = REPORTER_LINE_RE.sub("", text or "")
+    raw = text or ""
+    reporters = {m.group(1).lower() for m in REPORTER_USERNAME_RE.finditer(raw)}
+    clean = REPORTER_LINE_RE.sub("", raw)
     usernames = []
     seen_u: set[str] = set()
     for m in USERNAME_RE.finditer(clean):
         u = m.group(1)
         low = u.lower()
-        if low.endswith("_bot") or low in seen_u:
+        if low.endswith("_bot") or low in seen_u or low in reporters:
             continue
         seen_u.add(low)
         usernames.append(u)
@@ -128,10 +137,15 @@ def _post_url(channel_username: str, msg_id: int) -> str:
 
 def _summary_from_post(text: str) -> str:
     cleaned = REPORTER_LINE_RE.sub("", text or "")
+    cleaned = MARKDOWN_LINK_RE.sub("", cleaned)
     cleaned = re.sub(r"https?://\S+", "", cleaned)
     cleaned = re.sub(r"@[A-Za-z0-9_]+", "", cleaned)
     cleaned = re.sub(r"[🆔🪪⏺️⭐🥷*️⃣][^\n]*", "", cleaned)
-    cleaned = re.sub(r"[\s⠀]+", " ", cleaned).strip()
+    # Вычищаем длинные цифровые последовательности (телефоны, карты, UID — они уже в credentials)
+    cleaned = re.sub(r"(?:\+?\d[\s\-()]*){10,}", "", cleaned)
+    # Лишние символы форматирования
+    cleaned = re.sub(r"\*+|#+", "", cleaned)
+    cleaned = re.sub(r"[\s⠀]+", " ", cleaned).strip(" ,.;:-—")
     return cleaned[:400] or "Скам в P2P (Bybit/MEXC)"
 
 
