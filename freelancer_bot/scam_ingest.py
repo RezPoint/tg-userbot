@@ -181,6 +181,13 @@ def _summary_from_post(text: str) -> str:
     cleaned = re.sub(r"https?://\S+", "", cleaned)
     cleaned = re.sub(r"@[A-Za-z0-9_]+", "", cleaned)
     cleaned = re.sub(r"[🆔🪪⏺️⭐🥷*️⃣][^\n]*", "", cleaned)
+    # Шаблонные лейблы P2P_BlackList без эмодзи
+    cleaned = re.sub(
+        r"(?:Telegram\s+(?:ID|Username)|Биржа|UID|Никнейм|Никн?:|Ник)\s*:?[^\n]*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
     # Auto-Bybit юзернеймы (User0323G8HKHt) — это мусор, реальные ники в bybit_nickname
     cleaned = BYBIT_AUTO_USER_RE.sub("", cleaned)
     # Вычищаем длинные цифровые последовательности (телефоны, карты, UID — они уже в credentials)
