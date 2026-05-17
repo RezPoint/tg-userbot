@@ -1,0 +1,16 @@
+.venv
+.git
+.pytest_cache
+.ruff_cache
+*.egg-info
+data
+sessions
+tests
+deploy
+*.bak.*
+.env.bak.*
+__pycache__
+*.pyc
+README.md
+SECURITY.md
+LICENSE

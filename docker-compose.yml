@@ -1,0 +1,22 @@
+services:
+  bot:
+    build: .
+    image: freelance-radar:local
+    container_name: freelance-radar
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./sessions:/app/sessions
+    networks:
+      - supabase
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  supabase:
+    external: true
+    name: supabase_default

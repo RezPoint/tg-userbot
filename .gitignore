@@ -11,3 +11,5 @@ sessions/
 *.db
 *.session
 *.session-journal
+
+.env.bak.*
