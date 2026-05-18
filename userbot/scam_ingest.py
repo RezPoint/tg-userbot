@@ -428,22 +428,30 @@ async def _process_message(client: TelegramClient, dsn: str, msg, category: str 
     )
 
 
-def channels_from_env() -> list[tuple[str, str]]:
+def channels_from_env() -> list[tuple[str | int, str]]:
     """Парсит SKIBIDI_SCAM_INGEST_CHANNELS в список (channel, category).
-    Формат: `name:category` (через запятую). Если категория не указана — 'general'.
-    Пример: `P2P_BlackList:p2p,SomeOtherChan` → [('P2P_BlackList','p2p'), ('SomeOtherChan','general')]
+    Формат: `name_or_id:category` (через запятую). Если категория не указана — 'general'.
+    Если name выглядит как численный ID (опц. минус + цифры) — кастуется в int,
+    тогда Telethon обойдёт ResolveUsernameRequest и FLOOD WAIT.
     """
     raw = os.environ.get("SKIBIDI_SCAM_INGEST_CHANNELS", "").strip()
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str | int, str]] = []
     for item in raw.split(","):
         item = item.strip()
         if not item:
             continue
         if ":" in item:
             ch, cat = item.split(":", 1)
-            out.append((ch.strip().lstrip("@"), cat.strip() or "general"))
+            ch = ch.strip().lstrip("@")
+            cat = cat.strip() or "general"
         else:
-            out.append((item.lstrip("@"), "general"))
+            ch = item.lstrip("@")
+            cat = "general"
+        try:
+            ch_val: str | int = int(ch)
+        except ValueError:
+            ch_val = ch
+        out.append((ch_val, cat))
     return out
 
 
