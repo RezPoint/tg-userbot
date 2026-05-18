@@ -264,18 +264,47 @@ def extract(text: str) -> Extracted:
     )
 
 
+import time as _time
+
+# Кэш в памяти процесса: username.lower() -> (resolved_id_or_None, skip_until_monotonic)
+# skip_until > now() означает «не дёргать API до этого момента» (был флуд или dead-username).
+_RESOLVE_CACHE: dict[str, tuple[int | None, float]] = {}
+# Глобальный флуд-таймстамп: если последний resolve упал во флуд, все последующие
+# пропускаются мгновенно до этого времени (Telegram-флуд per-account, не per-username).
+_GLOBAL_FLOOD_UNTIL: float = 0.0
+
+
 async def _resolve(client: TelegramClient, username: str) -> int | None:
+    global _GLOBAL_FLOOD_UNTIL
+    now = _time.monotonic()
+    key = username.lower()
+    cached = _RESOLVE_CACHE.get(key)
+    if cached is not None:
+        cached_id, until = cached
+        # Если есть ID — возвращаем сразу. Если None и таймаут не истёк — пропускаем.
+        if cached_id is not None or now < until:
+            return cached_id
+    if now < _GLOBAL_FLOOD_UNTIL:
+        # Аккаунт во флуде — не дёргаем API, помечаем в кэше до конца флуда
+        _RESOLVE_CACHE[key] = (None, _GLOBAL_FLOOD_UNTIL)
+        return None
     try:
         ent = await client.get_entity(username)
-        return getattr(ent, "id", None)
+        resolved_id = getattr(ent, "id", None)
+        _RESOLVE_CACHE[key] = (resolved_id, now + 86400)  # кэшируем успех на сутки
+        return resolved_id
     except (UsernameInvalidError, UsernameNotOccupiedError, ValueError):
+        # Юзера нет — кэшируем None надолго чтобы больше не дёргать
+        _RESOLVE_CACHE[key] = (None, now + 86400)
         return None
     except FloodWaitError as e:
-        LOG.warning("flood wait %ss on resolve @%s", e.seconds, username)
-        await asyncio.sleep(min(e.seconds, 60))
+        LOG.warning("flood wait %ss on resolve @%s — глобальный пропуск резолвов", e.seconds, username)
+        _GLOBAL_FLOOD_UNTIL = now + e.seconds
+        _RESOLVE_CACHE[key] = (None, _GLOBAL_FLOOD_UNTIL)
         return None
     except Exception as e:  # noqa: BLE001
         LOG.warning("resolve @%s failed: %s", username, e)
+        _RESOLVE_CACHE[key] = (None, now + 3600)
         return None
 
 
@@ -407,6 +436,9 @@ async def _process_message(client: TelegramClient, dsn: str, msg, category: str 
     resolved: dict[str, int | None] = {}
     for u in ext.usernames:
         resolved[u.lower()] = await _resolve(client, u)
+        # sleep между резолвами только если реально дёргали API (не из кэша)
+        if _time.monotonic() < _GLOBAL_FLOOD_UNTIL:
+            continue
         await asyncio.sleep(0.5)
 
     channel = await msg.get_chat()
