@@ -112,7 +112,8 @@ RUSSIAN_BANKS_NORMALIZED: list[tuple[str, str]] = [
     (r"Финам[еу]?", "Финам"),
     (r"Интеза|Intesa", "Интеза"),
     (r"Кубань\s*Кредит", "Кубань Кредит"),
-    (r"OZON\s*Банк|Озон\s*Банк|Озон[-\s]?Карт[аыуоие]?|Ozon\s*Bank|Ozon[-\s]?Card", "OZON Банк"),
+    (r"OZON\s*Банк|Озон\s*Банк|Озон[-\s]?Счёт|Озон[-\s]?Карт[аыуоие]?|Ozon\s*Bank|Ozon[-\s]?Card", "OZON Банк"),
+    (r"Еком\s*Банк|EcomBank|Ecom\s*Bank", "Еком Банк"),
     (r"Wildberries\s*Банк|WB\s*Банк|WB[-\s]?Карт[аыуоие]?", "WB Банк"),
     (r"Яндекс\s*Банк|Яндекс[-\s]?Карт[аыуоие]?|Yandex\s*Bank|Yandex[-\s]?Pay|YBS", "Яндекс Банк"),
     (r"X5\s*Банк", "X5 Банк"),
@@ -468,8 +469,15 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     cleaned = re.sub(r"@[A-Za-z0-9_]+", "", cleaned)
     # Хэштеги
     cleaned = re.sub(r"#[\wЀ-ӿ]+", "", cleaned)
+    # Аналитические-отчёты по номеру (типа `🔎 Телефонные книги:`, `🧑‍💻 ВКонтакте:`, `🏦 Мобильный банк:`)
+    cleaned = re.sub(
+        r"(?m)^[^\nА-Яа-яA-Za-z0-9]*(?:Телефонные\s*книги|Мобильный\s*банк|Оператор|Регион|Страна|Интересовались\s*этим|E-?mail|ВКонтакте|Telegram\s*ID|VK|Skype|Instagram|Facebook)\s*:?[^\n]*",
+        "", cleaned, flags=re.IGNORECASE,
+    )
+    # Графика-разделители из BoxDrawing (├ │ └ ─ ━ ┌ ┐ ┘)
+    cleaned = re.sub(r"[├│└┌┐┘┃─━═▬]+", "", cleaned)
     # Внимание: emoji *️⃣ содержит ASCII '*' в charset — обрабатываем отдельно.
-    cleaned = re.sub(r"[🆔🪪⏺️⭐🥷][^\n]*", "", cleaned)
+    cleaned = re.sub(r"[🆔🪪⏺️⭐🥷🔎🧑🏦📧👁📱💻📞✉️🖥️🎁][^\n]*", "", cleaned)
     cleaned = re.sub(r"\*️⃣[^\n]*", "", cleaned)
     # Шаблонные лейблы P2P_BlackList — ловим только в начале строки, чтобы не съесть «ник» из «мошенник»
     cleaned = re.sub(
