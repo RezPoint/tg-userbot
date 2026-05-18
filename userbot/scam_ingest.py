@@ -26,9 +26,9 @@ MEXC_UID_RE = re.compile(r"mexc\.com/[^/]+/p2p/profile/(\w+)", re.IGNORECASE)
 # «⏺️ Реквизит: 9203041024» или «Реквизит: 9203041024» — 10–12 цифр без BIN.
 ACCOUNT_SHORT_RE = re.compile(r"[Рр]еквизит[ы]?\s*:?\s*(\d{10,12})(?!\d)")
 # «🆔 UID: 502905147» — числовой Bybit/MEXC UID
-BYBIT_UID_NUM_RE = re.compile(r"🆔\s*\**\s*UID\s*\**:?\s*(\d{6,12})(?!\d)")
+BYBIT_UID_NUM_RE = re.compile(r"(?m)^[^A-Za-zА-Яа-я0-9\n]*UID[\s:*]*(\d{6,12})(?!\d)", re.IGNORECASE)
 # «🪪Никнейм: Matvey_BB» — отображаемое имя на Bybit (минимум 4 символа)
-BYBIT_NICK_RE = re.compile(r"🪪\s*\**\s*[Нн]ик(?:нейм)?\s*\**:?\s*([A-Za-z][A-Za-z0-9_.-]{3,32})")
+BYBIT_NICK_RE = re.compile(r"(?m)^[^A-Za-zА-Яа-я\n]*[Нн]ик(?:нейм)?[\s:*]*([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё0-9_.\-]{2,32})")
 # «Bombilooo (UID 576902331)» — никнейм с числовым UID в скобках (мин 4)
 BYBIT_NICK_UID_RE = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_.-]{3,32})\s*\(\s*UID\s+(\d{6,12})\s*\)",
@@ -64,7 +64,72 @@ NAME_STOPWORDS = frozenset({
     "КОНТАКТ", "КОНТАКТЫ", "СУММА", "РЕКВИЗИТЫ", "ПРИЧИНА", "ИНФО", "ИНФОРМАЦИЯ",
     # Английский мусор из ников
     "COUNTER", "TERRORIST", "WIN", "USER", "BOT", "TELEGRAM", "BYBIT", "MEXC",
+    # Названия банков (если попадают как первое слово «ФИО»)
+    "СБЕРБАНК", "СБЕР", "ВТБ", "ГАЗПРОМБАНК", "АЛЬФА", "АЛЬФА-БАНК",
+    "РОССЕЛЬХОЗБАНК", "РСХБ", "ТИНЬКОФФ", "Т-БАНК", "TINKOFF",
+    "РАЙФФАЙЗЕН", "RAIFFEISEN", "ОТКРЫТИЕ", "ПРОМСВЯЗЬБАНК", "ПСБ",
+    "МКБ", "СОВКОМБАНК", "РОСБАНК", "ОТП", "ЮНИКРЕДИТ", "CITIBANK",
+    "АК", "БАРС", "УРАЛСИБ", "ЗЕНИТ", "АВАНГАРД", "ТОЧКА",
+    "ДОМ.РФ", "ПОЧТА", "ПОЧТА-БАНК", "ХОУМ", "КРЕДИТ", "EUROPE",
+    "СТАНДАРТ", "ЛОКО", "ЛОКО-БАНК", "УБРИР", "СКБ", "БКС", "ФИНАМ", "ИНТЕЗА",
+    "OZON", "ОЗОН", "WILDBERRIES", "WB", "ЯНДЕКС", "YANDEX",
+    "ЮMONEY", "YOOMONEY", "QIWI", "КИВИ", "PAYPAL",
+    "SBP", "СБП",
 })
+# Полный список российских банков (топ-100 + payment services). Для:
+# (а) исключения из FIO (если value начинается с банка — это лейбл, не имя)
+# (б) детекции как отдельный credential kind='bank'
+RUSSIAN_BANKS_PATTERNS = [
+    # Топ-10
+    r"СберБанк", r"Сбербанк", r"Сбер\b", r"Sber(?:Bank)?",
+    r"ВТБ", r"VTB",
+    r"Газпромбанк", r"Газпром\s*банк", r"Gazprombank", r"ГПБ\b",
+    r"Альфа[-\s]?Банк", r"Альфа\b", r"Alfa[-\s]?Bank",
+    r"Россельхозбанк", r"Россельхоз[-\s]?банк", r"РСХБ",
+    r"Тинькофф(?:банк)?", r"Тинькоф", r"Т[-\s]?Банк", r"Tinkoff", r"T[-\s]?Bank",
+    r"Райффайзен(?:банк)?", r"Raiffeisen",
+    r"Открытие\s*банк", r"ФК\s*Открытие", r"Otkrytie",
+    r"Промсвязьбанк", r"ПСБ\b", r"PSB\b",
+    r"МКБ\b", r"Московский\s*Кредитный\s*Банк",
+    # Средние
+    r"Совкомбанк", r"Sovcombank",
+    r"Росбанк", r"Rosbank",
+    r"ОТП\s*Банк", r"OTP\s*Bank",
+    r"ЮниКредит(?:Банк)?", r"UniCredit",
+    r"Citi(?:bank)?", r"Сити[-\s]?банк",
+    r"АК\s*Барс", r"Ак\s*Барс",
+    r"Уралсиб", r"Uralsib",
+    r"Зенит\b", r"Zenit",
+    r"Авангард",
+    r"Точка\s*Банк", r"Tochka",
+    r"ДОМ\.?РФ", r"Дом\.РФ",
+    r"Почта\s*Банк", r"Pochta\s*Bank",
+    r"Хоум\s*Кредит", r"Home\s*Credit",
+    r"Кредит\s*Европа\s*Банк",
+    r"Русский\s*Стандарт", r"Russian\s*Standard",
+    r"Локо[-\s]?Банк",
+    r"УБРиР", r"Уральский\s*Банк\s*Реконструкции",
+    r"СКБ[-\s]?банк",
+    r"БКС\s*Банк", r"BCS\s*Bank",
+    r"Финам",
+    r"Интеза", r"Intesa",
+    r"Дом\.рф",
+    # Цифровые / новые
+    r"OZON\s*Банк", r"Озон\s*Банк", r"Ozon\s*Bank",
+    r"Wildberries\s*Банк", r"WB\s*Банк",
+    r"Яндекс\s*Банк", r"Yandex\s*Bank", r"YBS",
+    r"X5\s*Банк",
+    # Платёжные сервисы (часто упоминаются как банк-источник)
+    r"ЮMoney", r"Юmoney", r"Yoomoney", r"Яндекс\.Деньги",
+    r"QIWI", r"Киви[-\s]?(?:Банк)?",
+    r"SBP", r"СБП",  # Система Быстрых Платежей
+    r"PayPal",
+]
+BANK_RE = re.compile(
+    r"(?<![A-Za-zА-Яа-я])(" + "|".join(RUSSIAN_BANKS_PATTERNS) + r")(?![A-Za-zА-Яа-я])",
+    re.IGNORECASE,
+)
+
 USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{3,31})")
 # Строка отправителя: с @username, или с произвольным значением после двоеточия
 REPORTER_LINE_RE = re.compile(
@@ -127,6 +192,7 @@ class Extracted:
     bybit_nicknames: list[str]
     bybit_uids_numeric: list[str]
     full_names: list[str]
+    banks: list[str]
 
 
 EXAMPLE_MARKERS = (
@@ -143,7 +209,7 @@ def extract(text: str) -> Extracted:
     raw = text or ""
     # Служебные «пример»-посты из канала-источника игнорируем целиком
     if is_example_post(raw):
-        return Extracted([], [], [], [], [], [], [], [], [])
+        return Extracted([], [], [], [], [], [], [], [], [], [])
     reporters = {m.group(1).lower() for m in REPORTER_USERNAME_RE.finditer(raw)}
     clean = REPORTER_LINE_RE.sub("", raw)
     # Вырезаем URL'ы целиком — оттуда регексы CARD/PHONE/ACCOUNT ловят order_id как фейк-карту/телефон
@@ -218,6 +284,16 @@ def extract(text: str) -> Extracted:
         if uid_v not in seen_un:
             seen_un.add(uid_v); uids_num.append(uid_v)
 
+    # Банки — отдельный credential kind
+    banks: list[str] = []
+    seen_bk: set[str] = set()
+    for m in BANK_RE.finditer(clean):
+        v = m.group(1).strip()
+        low = v.lower()
+        if low and low not in seen_bk:
+            seen_bk.add(low)
+            banks.append(v)
+
     # Извлекаем свободные значения отправителя (для blacklist FIO-кандидатов)
     sender_free = set()
     for m in REPORTER_FREE_VALUE_RE.finditer(raw):
@@ -264,7 +340,7 @@ def extract(text: str) -> Extracted:
         usernames=usernames, phones=phones, cards=cards,
         bybit_uids=bybit, mexc_uids=mexc, account_shorts=accs,
         bybit_nicknames=nicks, bybit_uids_numeric=uids_num,
-        full_names=names,
+        full_names=names, banks=banks,
     )
 
 
@@ -420,6 +496,7 @@ async def _store(
                 ("bybit_nickname", extracted.bybit_nicknames),
                 ("bybit_uid_numeric", extracted.bybit_uids_numeric),
                 ("full_name", extracted.full_names),
+                ("bank", extracted.banks),
             ):
                 for v in values:
                     await cur.execute(
@@ -444,7 +521,7 @@ async def _process_message(client: TelegramClient, dsn: str, msg, category: str 
     if not (
         ext.usernames or ext.phones or ext.cards or ext.bybit_uids or ext.mexc_uids
         or ext.account_shorts or ext.bybit_nicknames or ext.bybit_uids_numeric
-        or ext.full_names
+        or ext.full_names or ext.banks
     ):
         return
 
