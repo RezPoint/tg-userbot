@@ -54,6 +54,8 @@ NAME_STOPWORDS = frozenset({
     "РАБОТАТЬ", "ВЕРНУТЬ", "ОТДАТЬ", "ПЛАТИТЬ", "ПРИНЯТЬ", "ОТМЕНИТЬ", "ОТПРАВКА",
     "РЕШАТЬ", "РЕШИТЬ", "СДЕЛАТЬ", "СДЕЛАЛ", "СКИДЫВАЕТ", "КИДАЕТ", "ВЫДАЛ",
     "СКРЫВАЕТ", "СКРЫЛ", "ПРОПАЛ", "ИСЧЕЗ", "ТРЕБУЕТ",
+    "КИНУЛ", "КИНУЛА", "КИНУЛИ", "СКИНУЛ", "СКИНУЛА",
+    "РАБОТАЕТ", "РАБОТАЛ", "ПИШЕТ", "ПИШИ", "ОБМАН", "ОБМАНУЛ",
     # Глаголы/слова из жалоб
     "СМЕНИЛ", "СМЕНИЛА", "СМЕНИЛИ", "НОМЕР", "НОМЕРА", "АПИЛ", "АПЕЛЛЯЦИЯ",
     "ЛИЦА", "ЛИЦО", "ГОВНОЕДА", "ГОВНОЕД", "СИДИТ", "СИДЯТ", "БУДЬТЕ",
@@ -410,6 +412,17 @@ def extract(text: str) -> Extracted:
         toks = v.split()
         if len(toks) >= 2 and len(toks[-1]) == 1 and toks[-1].upper() in {"С","В","К","А","И","О","У","Я","Б"}:
             continue
+        # Расширение: если сразу после ФИО идёт lowercase русское слово ≥3 char (типично фамилия
+        # написанная с маленькой буквы из небрежности), добавляем его в ФИО.
+        m_end = m.end()
+        tail_match = re.match(r"\s+([а-яё]{3,})\b", full_clean[m_end:])
+        if tail_match:
+            tail_word = tail_match.group(1)
+            if tail_word.upper() not in NAME_STOPWORDS:
+                v = v + " " + tail_word.capitalize()
+                low = v.lower()
+                if low in seen_fn:
+                    continue
         seen_fn.add(low)
         names.append(v)
 
@@ -506,6 +519,12 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     cleaned = re.sub(r"(?:\+?\d[ \t\-()]*){10,}", "", cleaned)
     # Разделители-«рамки» (горизонтальные линии из ─━═│┃▬)
     cleaned = re.sub(r"[─━═│┃▬─]{3,}", "", cleaned)
+    # Маты и оскорбления — не несут смысла в reason
+    cleaned = re.sub(
+        r"\b(?:сукин\s+сын|сука|сучка|блядь|блять|пиздец|пизда|хуй|хуёв\w*|нахуй|нахуя|охуел\w*|"
+        r"ебать|ёбан\w*|ебан\w*|пидор\w*|урод\w*|тварь|мраз\w*|долбоёб\w*|хер|нахер|еб[а-я]+\b)",
+        "", cleaned, flags=re.IGNORECASE,
+    )
     # Лишние символы форматирования
     cleaned = re.sub(r"\*+|#+|—", "", cleaned)
     # Балансировка скобок
@@ -514,6 +533,8 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     while cleaned.count("(") > cleaned.count(")"):
         cleaned = cleaned.replace("(", "", 1)
     cleaned = re.sub(r"\(\s*\)", "", cleaned)
+    # «, ,», «,  ,» → одна запятая
+    cleaned = re.sub(r",\s*,+", ",", cleaned)
     cleaned = re.sub(r"[,;:.]{2,}", ",", cleaned)
     cleaned = re.sub(r"[\s⠀]+", " ", cleaned).strip(" ,.;:-")
     while True:
