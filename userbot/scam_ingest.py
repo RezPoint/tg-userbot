@@ -597,6 +597,54 @@ async def dorezolv_pending_usernames(
     return resolved_n
 
 
+async def seed_pending_from_existing(dsn: str, *, limit: int | None = None) -> int:
+    """Одноразовый seed: проходит по scam_credentials с scammer_tg_id IS NULL,
+    перепарсит raw_text → extract().usernames и кладёт в pending для последующего
+    дорезолва через dorezolv_loop. Возвращает кол-во созданных записей в pending."""
+    inserted = 0
+    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+        await conn.execute("SET search_path TO skibidi, public")
+        sql = """
+            SELECT DISTINCT ON (source_chat_id, source_msg_id)
+                source_chat_id, source_msg_id, source_url, raw_text
+            FROM scam_credentials
+            WHERE scammer_tg_id IS NULL
+              AND raw_text IS NOT NULL
+              AND source_chat_id IS NOT NULL
+              AND source_msg_id IS NOT NULL
+            ORDER BY source_chat_id, source_msg_id
+        """
+        params: tuple = ()
+        if limit is not None:
+            sql += " LIMIT %s"
+            params = (limit,)
+        async with conn.cursor() as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+        LOG.info("seed: %d уникальных постов с NULL scammer_tg_id", len(rows))
+        for (chat_id, msg_id, url, raw) in rows:
+            ext = extract(raw or "")
+            if not ext.usernames:
+                continue
+            summary = _summary_from_post(raw or "", also_strip=ext.bybit_nicknames)
+            category = "p2p" if chat_id == -1003115834241 else "general"
+            async with conn.cursor() as cur:
+                for u in ext.usernames:
+                    await cur.execute(
+                        """
+                        INSERT INTO scam_pending_usernames
+                            (username, source_chat_id, source_msg_id, source_url, summary, category)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (username, source_msg_id) DO NOTHING
+                        """,
+                        (u, chat_id, msg_id, url, summary, category),
+                    )
+                    inserted += cur.rowcount or 0
+            await conn.commit()
+    LOG.info("seed: создано %d новых pending-записей", inserted)
+    return inserted
+
+
 async def run_dorezolv_loop(
     client: TelegramClient, dsn: str, *, interval_s: int = 3600,
 ) -> None:
