@@ -54,13 +54,28 @@ NAME_STOPWORDS = frozenset({
     "РАБОТАТЬ", "ВЕРНУТЬ", "ОТДАТЬ", "ПЛАТИТЬ", "ПРИНЯТЬ", "ОТМЕНИТЬ", "ОТПРАВКА",
     "РЕШАТЬ", "РЕШИТЬ", "СДЕЛАТЬ", "СДЕЛАЛ", "СКИДЫВАЕТ", "КИДАЕТ", "ВЫДАЛ",
     "СКРЫВАЕТ", "СКРЫЛ", "ПРОПАЛ", "ИСЧЕЗ", "ТРЕБУЕТ",
+    # Глаголы/слова из жалоб
+    "СМЕНИЛ", "СМЕНИЛА", "СМЕНИЛИ", "НОМЕР", "НОМЕРА", "АПИЛ", "АПЕЛЛЯЦИЯ",
+    "ЛИЦА", "ЛИЦО", "ГОВНОЕДА", "ГОВНОЕД", "СИДИТ", "СИДЯТ", "БУДЬТЕ",
+    "ВНИМАТЕЛЬНЫ", "ВНИМАНИЕ", "ВНИМАТЕЛЕН",
+    # Label'ы секций («Данные», «Телефон», «Карта»…)
+    "ДАННЫЕ", "ДАННЫХ", "ТЕЛЕФОН", "ТЕЛЕФОНЫ", "КАРТА", "КАРТЫ", "СЧЁТ", "СЧЕТ",
+    "EMAIL", "ПОЧТА", "БАНК", "АДРЕС", "ИМЯ", "ФАМИЛИЯ", "ОТЧЕСТВО",
+    "КОНТАКТ", "КОНТАКТЫ", "СУММА", "РЕКВИЗИТЫ", "ПРИЧИНА", "ИНФО", "ИНФОРМАЦИЯ",
+    # Английский мусор из ников
+    "COUNTER", "TERRORIST", "WIN", "USER", "BOT", "TELEGRAM", "BYBIT", "MEXC",
 })
 USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{3,31})")
+# Строка отправителя: с @username, или с произвольным значением после двоеточия
 REPORTER_LINE_RE = re.compile(
-    r"(?:🥷\s*)?(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*@[A-Za-z0-9_]+",
+    r"(?:🗣|🥷)?\s*(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*[^\n]*",
 )
 REPORTER_USERNAME_RE = re.compile(
-    r"(?:🥷\s*)?(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*@([A-Za-z0-9_]+)",
+    r"(?:🗣|🥷)?\s*(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*@([A-Za-z0-9_]+)",
+)
+# Свободно-текстовое значение «Отправитель: Counter Terrorist Win» (не @username)
+REPORTER_FREE_VALUE_RE = re.compile(
+    r"(?:🗣|🥷)?\s*(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*([^\n@]+)",
 )
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\([^)]+\)")
 DIGITS_RE = re.compile(r"\d+(?:[\s\-.]*\d+)*")
@@ -111,8 +126,21 @@ class Extracted:
     full_names: list[str]
 
 
+EXAMPLE_MARKERS = (
+    "🏳 пример", "🏳пример", "пример:", "example:", "тестовый пост",
+)
+
+
+def is_example_post(text: str) -> bool:
+    low = (text or "").lower()
+    return any(m in low for m in EXAMPLE_MARKERS)
+
+
 def extract(text: str) -> Extracted:
     raw = text or ""
+    # Служебные «пример»-посты из канала-источника игнорируем целиком
+    if is_example_post(raw):
+        return Extracted([], [], [], [], [], [], [], [], [])
     reporters = {m.group(1).lower() for m in REPORTER_USERNAME_RE.finditer(raw)}
     clean = REPORTER_LINE_RE.sub("", raw)
     usernames = []
@@ -187,6 +215,12 @@ def extract(text: str) -> Extracted:
         if uid_v not in seen_un:
             seen_un.add(uid_v); uids_num.append(uid_v)
 
+    # Извлекаем свободные значения отправителя (для blacklist FIO-кандидатов)
+    sender_free = set()
+    for m in REPORTER_FREE_VALUE_RE.finditer(raw):
+        val = m.group(1).strip().lower()
+        if val:
+            sender_free.add(val)
     # ФИО — ищем в очищенном тексте (без отправителя, ссылок и эмодзи-блоков)
     full_clean = REPORTER_LINE_RE.sub("", raw)
     full_clean = re.sub(r"https?://\S+", "", full_clean)
@@ -197,6 +231,9 @@ def extract(text: str) -> Extracted:
         v = m.group(1).strip()
         low = v.lower()
         if low in seen_fn or low in {"скам в p2p", "скам ный", "скам в bybit"}:
+            continue
+        # совпало со значением отправителя («Counter Terrorist Win») — это не ФИО
+        if low in sender_free:
             continue
         # отсечь явный мусор — слово «Скам» / «Скамер» / «Bybit» в начале
         first = v.split()[0].lower()
