@@ -79,6 +79,63 @@ NAME_STOPWORDS = frozenset({
 # Полный список российских банков (топ-100 + payment services). Для:
 # (а) исключения из FIO (если value начинается с банка — это лейбл, не имя)
 # (б) детекции как отдельный credential kind='bank'
+RUSSIAN_BANKS_NORMALIZED: list[tuple[str, str]] = [
+    (r"СберБанк|Сбербанк[еау]?|Сбербанку|Сбер(?:ыч|ом|у|а|е)?|Sber(?:Bank)?|СБ\b|Sb\b", "Сбербанк"),
+    (r"ВТБ(?:24|шка|шку|шке)?|VTB", "ВТБ"),
+    (r"Газпромбанк[еу]?|Газпром[-\s]?банк|Газпром\b|Gazprombank|ГПБ\b", "Газпромбанк"),
+    (r"Альфа[-\s]?Банк|Альфа(?:бан|банк|ха|хе|хой)?|Альф\b|Alfa[-\s]?Bank", "Альфа-Банк"),
+    (r"Россельхоз(?:банк|банке|банку)?|РСХБ|Россельх", "Россельхозбанк"),
+    (r"Тинькофф(?:банк|банке|банку)?|Тинькоф|Тинь(?:ка|ке|ку|ок|ёк)?|Тинёк|Т[-\s]?Банк|Tinkoff|T[-\s]?Bank|T[-\s]?Card|ТБ\b", "Тинькофф"),
+    (r"Райффайзен(?:банк|банке|банку)?|Райф(?:фа)?|Raiffeisen", "Райффайзен"),
+    (r"Открытие\s*банк|Открытие\b|ФК\s*Открытие|Otkrytie", "Открытие"),
+    (r"Промсвязьбанк[еу]?|Промсвязь|ПСБ\b|PSB\b", "ПСБ"),
+    (r"МКБ\b|Московский\s*Кредитный\s*Банк", "МКБ"),
+    (r"Совкомбанк[еу]?|Совком|Sovcombank", "Совкомбанк"),
+    (r"Росбанк[еу]?|Rosbank", "Росбанк"),
+    (r"ОТП\s*Банк|ОТП\b|OTP\s*Bank|OTP\b", "ОТП Банк"),
+    (r"ЮниКредит(?:Банк)?|UniCredit", "ЮниКредит"),
+    (r"Citi(?:bank)?|Сити[-\s]?банк", "Ситибанк"),
+    (r"АК\s*Барс|Ак\s*Барс|АкБарс", "Ак Барс"),
+    (r"Уралсиб|Uralsib", "Уралсиб"),
+    (r"Зенит\b|Zenit", "Зенит"),
+    (r"Авангард[еу]?|Аванг\b", "Авангард"),
+    (r"Точка\s*Банк|Точка\b|Tochka", "Точка"),
+    (r"ДОМ\.?РФ|Дом\.РФ|Дом\.рф|DomRF", "ДОМ.РФ"),
+    (r"Почта[-\s]?Банк|Pochta\s*Bank", "Почта Банк"),
+    (r"Хоум\s*Кредит|Хоум\b|ХК\b|Home\s*Credit", "Хоум Кредит"),
+    (r"Кредит\s*Европа\s*Банк|КЕБ\b", "Кредит Европа Банк"),
+    (r"Русский\s*Стандарт|Russian\s*Standard", "Русский Стандарт"),
+    (r"Локо[-\s]?Банк|Локо\b", "Локо-Банк"),
+    (r"УБРиР|УБР\b|Уральский\s*Банк\s*Реконструкции", "УБРиР"),
+    (r"СКБ[-\s]?банк|СКБ\b", "СКБ-Банк"),
+    (r"БКС\s*Банк|БКС\b|BCS\s*Bank", "БКС"),
+    (r"Финам[еу]?", "Финам"),
+    (r"Интеза|Intesa", "Интеза"),
+    (r"Кубань\s*Кредит", "Кубань Кредит"),
+    (r"OZON\s*Банк|Озон\s*Банк|Озон[-\s]?Карт[аыуоие]?|Ozon\s*Bank|Ozon[-\s]?Card", "OZON Банк"),
+    (r"Wildberries\s*Банк|WB\s*Банк|WB[-\s]?Карт[аыуоие]?", "WB Банк"),
+    (r"Яндекс\s*Банк|Яндекс[-\s]?Карт[аыуоие]?|Yandex\s*Bank|Yandex[-\s]?Pay|YBS", "Яндекс Банк"),
+    (r"X5\s*Банк", "X5 Банк"),
+    (r"Black\s*Card|Black\s*Карта", "Black Card (Тинькофф)"),
+    (r"Premium\s*Card", "Premium Card"),
+    (r"ЮMoney|Юmoney|Yoomoney|Яндекс\.Деньги", "ЮMoney"),
+    (r"QIWI|Киви[-\s]?(?:Банк)?", "QIWI"),
+    (r"SBP|СБП", "СБП"),
+    (r"PayPal", "PayPal"),
+    (r"Юпей|Yandex\s*Pay", "Yandex Pay"),
+    (r"СберПрайм\+?", "СберПрайм"),
+]
+
+
+def normalize_bank(value: str) -> str | None:
+    """Возвращает каноническое имя банка или None если не банк."""
+    v = value.strip()
+    for pattern, canonical in RUSSIAN_BANKS_NORMALIZED:
+        if re.fullmatch(pattern, v, re.IGNORECASE):
+            return canonical
+    return None
+
+
 RUSSIAN_BANKS_PATTERNS = [
     # Топ-10 + сленг/сокращения
     r"СберБанк", r"Сбербанк", r"Сбербанке", r"Сбербанку", r"Сбер(?:ыч|ом|у|а|е)?",
@@ -292,15 +349,16 @@ def extract(text: str) -> Extracted:
         if uid_v not in seen_un:
             seen_un.add(uid_v); uids_num.append(uid_v)
 
-    # Банки — отдельный credential kind
+    # Банки — отдельный credential kind, нормализуем к каноническому имени
     banks: list[str] = []
     seen_bk: set[str] = set()
     for m in BANK_RE.finditer(clean):
-        v = m.group(1).strip()
-        low = v.lower()
+        raw_v = m.group(1).strip()
+        canon = normalize_bank(raw_v) or raw_v
+        low = canon.lower()
         if low and low not in seen_bk:
             seen_bk.add(low)
-            banks.append(v)
+            banks.append(canon)
 
     # Извлекаем свободные значения отправителя (для blacklist FIO-кандидатов)
     sender_free = set()
