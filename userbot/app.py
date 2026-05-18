@@ -9,6 +9,7 @@ from telethon import TelegramClient, events
 
 from .config import RuntimeConfig
 from . import scam_ingest
+from .health import start_health_server
 
 LOGGER = logging.getLogger("userbot")
 
@@ -29,6 +30,8 @@ class UserBot:
         await self.user_client.start()
         await self.bot_client.start(bot_token=self.config.bot_token)
 
+        self._health_runner = await start_health_server(self.user_client, port=8083)
+
         ingest_channels = scam_ingest.channels_from_env()
         if ingest_channels and self.config.supabase_dsn:
             import os as _os
@@ -47,6 +50,9 @@ class UserBot:
         await self._wait_until_stopped()
 
     async def shutdown(self) -> None:
+        runner = getattr(self, "_health_runner", None)
+        if runner is not None:
+            await runner.cleanup()
         await self.user_client.disconnect()
         await self.bot_client.disconnect()
 
