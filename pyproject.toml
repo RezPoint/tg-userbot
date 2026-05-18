@@ -1,7 +1,7 @@
 [project]
-name = "telegram-freelance-lead-bot"
+name = "tg-userbot"
 version = "0.1.0"
-description = "Telegram bot that monitors freelance channels and sends filtered leads."
+description = "Telegram userbot — универсальный бот на Telethon (scam-ingest и др.)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -15,5 +15,5 @@ dependencies = [
 Homepage = "https://github.com/Egor01KKK/telegram-freelance-lead-bot"
 
 [project.scripts]
-telegram-freelance-lead-bot = "freelancer_bot.app:cli"
+tg-userbot = "userbot.app:cli"
 

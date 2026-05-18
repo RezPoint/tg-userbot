@@ -1,14 +1,13 @@
 services:
   bot:
     build: .
-    image: freelance-radar:local
-    container_name: freelance-radar
+    image: tg-userbot:local
+    container_name: tg-userbot
     restart: unless-stopped
     env_file: .env
     volumes:
       - ./data:/app/data
       - ./sessions:/app/sessions
-      - /root/.cache/huggingface:/root/.cache/huggingface
     networks:
       - supabase
     logging:

@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import signal
+
+from telethon import TelegramClient, events
+
+from .config import RuntimeConfig
+from . import scam_ingest
+
+LOGGER = logging.getLogger("userbot")
+
+
+class UserBot:
+    def __init__(self, config: RuntimeConfig):
+        self.config = config
+        self.user_client = TelegramClient(
+            str(config.user_session_path), config.api_id, config.api_hash,
+        )
+        self.bot_client = TelegramClient(
+            str(config.bot_session_path), config.api_id, config.api_hash,
+        )
+        self._stop = asyncio.Event()
+
+    async def run(self) -> None:
+        self._register_bot_commands()
+        await self.user_client.start()
+        await self.bot_client.start(bot_token=self.config.bot_token)
+
+        ingest_channels = scam_ingest.channels_from_env()
+        if ingest_channels and self.config.supabase_dsn:
+            import os as _os
+            backfill_n = int(_os.environ.get("SKIBIDI_SCAM_INGEST_BACKFILL", "30"))
+            await scam_ingest.register_listeners(
+                self.user_client, ingest_channels, self.config.supabase_dsn,
+                backfill_on_start=backfill_n,
+            )
+            LOGGER.info(
+                "scam_ingest: live на %d канал(ов) + автобэкфилл %d постов",
+                len(ingest_channels), backfill_n,
+            )
+        else:
+            LOGGER.warning("scam_ingest выключен: канал/SUPABASE_DSN не заданы")
+
+        await self._wait_until_stopped()
+
+    async def shutdown(self) -> None:
+        await self.user_client.disconnect()
+        await self.bot_client.disconnect()
+
+    def _register_bot_commands(self) -> None:
+        @self.bot_client.on(events.NewMessage(pattern=r"^/start"))
+        async def start(event: events.NewMessage.Event) -> None:
+            await event.respond(
+                "👋 <b>tg-userbot</b> запущен.\n\n"
+                "Что я делаю:\n"
+                "• слушаю каналы из <code>SKIBIDI_SCAM_INGEST_CHANNELS</code>\n"
+                "• разбираю скам-карточки → пишу в <code>skibidi.scam_credentials</code>\n\n"
+                "Команды: /status /scam_backfill [N]",
+                parse_mode="html",
+            )
+
+        @self.bot_client.on(events.NewMessage(pattern=r"^/status"))
+        async def status(event: events.NewMessage.Event) -> None:
+            chans = scam_ingest.channels_from_env()
+            await event.respond(
+                f"📡 Каналы: {len(chans)}\n"
+                f"DSN: {'✅' if self.config.supabase_dsn else '❌'}\n"
+                f"User session: ✅\nBot session: ✅",
+            )
+
+        @self.bot_client.on(events.NewMessage(pattern=r"^/scam_backfill(?:\s+(\d+))?"))
+        async def scam_backfill(event: events.NewMessage.Event) -> None:
+            chans = scam_ingest.channels_from_env()
+            if not chans or not self.config.supabase_dsn:
+                await event.respond("❌ SKIBIDI_SCAM_INGEST_CHANNELS или SUPABASE_DSN не заданы.")
+                return
+            limit = int(event.pattern_match.group(1) or 30)
+            await event.respond(f"⏳ Backfill: {len(chans)} канал(ов), по {limit} постов.")
+            try:
+                await scam_ingest.backfill(
+                    self.user_client, chans, self.config.supabase_dsn, limit=limit,
+                )
+                await event.respond("✅ Backfill завершён, см. логи.")
+            except Exception as e:  # noqa: BLE001
+                await event.respond(f"❌ Ошибка backfill: {e}")
+
+        @self.bot_client.on(events.NewMessage(pattern=r"^/stop"))
+        async def stop(event: events.NewMessage.Event) -> None:
+            await event.respond("ℹ️ Остановка процесса контролируется systemd/docker.")
+
+    async def _wait_until_stopped(self) -> None:
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, self._stop.set)
+            except NotImplementedError:
+                pass
+        await self._stop.wait()
+
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="tg-userbot")
+    p.add_argument("--log-level", default=None)
+    return p.parse_args()
+
+
+async def run_app() -> None:
+    args = _parse_args()
+    cfg = RuntimeConfig.from_env()
+    logging.basicConfig(
+        level=(args.log_level or cfg.log_level).upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    bot = UserBot(cfg)
+    try:
+        await bot.run()
+    finally:
+        await bot.shutdown()
+
+
+def cli() -> None:
+    asyncio.run(run_app())
+
+
+if __name__ == "__main__":
+    cli()

@@ -9,6 +9,6 @@ WORKDIR /app
 COPY pyproject.toml requirements.txt ./
 RUN pip install --upgrade pip && pip install -r requirements.txt && pip install -e . --no-deps
 
-COPY freelancer_bot/ ./freelancer_bot/
+COPY userbot/ ./userbot/
 
-CMD ["python", "-m", "freelancer_bot"]
+CMD ["python", "-m", "userbot"]
