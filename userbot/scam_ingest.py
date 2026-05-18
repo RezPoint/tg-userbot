@@ -466,6 +466,8 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     cleaned = MARKDOWN_LINK_RE.sub("", cleaned)
     cleaned = re.sub(r"https?://\S+", "", cleaned)
     cleaned = re.sub(r"@[A-Za-z0-9_]+", "", cleaned)
+    # Хэштеги
+    cleaned = re.sub(r"#[\wЀ-ӿ]+", "", cleaned)
     # Внимание: emoji *️⃣ содержит ASCII '*' в charset — обрабатываем отдельно.
     cleaned = re.sub(r"[🆔🪪⏺️⭐🥷][^\n]*", "", cleaned)
     cleaned = re.sub(r"\*️⃣[^\n]*", "", cleaned)
@@ -476,26 +478,26 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
         cleaned,
         flags=re.IGNORECASE,
     )
+    # Названия банков (нормализованные и сырые) — вырезаем из reason, они уже в реквизитах
+    cleaned = BANK_RE.sub("", cleaned)
     # Auto-Bybit юзернеймы (User0323G8HKHt) и одиночный «User»
     cleaned = BYBIT_AUTO_USER_RE.sub("", cleaned)
     cleaned = BARE_USER_RE.sub("", cleaned)
     cleaned = BARE_URL_RE.sub("", cleaned)
     # Вычищаем длинные цифровые последовательности в одной строке (телефоны, карты, UID).
-    # Внимание: не пересекать \n чтобы не съесть число из следующей строки («1 лицо», «3 лицо»).
     cleaned = re.sub(r"(?:\+?\d[ \t\-()]*){10,}", "", cleaned)
+    # Разделители-«рамки» (горизонтальные линии из ─━═│┃▬)
+    cleaned = re.sub(r"[─━═│┃▬─]{3,}", "", cleaned)
     # Лишние символы форматирования
     cleaned = re.sub(r"\*+|#+|—", "", cleaned)
-    # Балансировка скобок: убираем непарные ( и )
+    # Балансировка скобок
     while cleaned.count(")") > cleaned.count("("):
         cleaned = cleaned.replace(")", "", 1)
     while cleaned.count("(") > cleaned.count(")"):
         cleaned = cleaned.replace("(", "", 1)
-    # Убираем пустые скобки, появившиеся после чистки
     cleaned = re.sub(r"\(\s*\)", "", cleaned)
-    # Двойные/тройные пунктуации
     cleaned = re.sub(r"[,;:.]{2,}", ",", cleaned)
     cleaned = re.sub(r"[\s⠀]+", " ", cleaned).strip(" ,.;:-")
-    # Убрать обрезки в конце (отдельные слова из 1-2 букв) — циклически
     while True:
         new = re.sub(r"\s+\S{1,2}$", "", cleaned).strip(" ,.;:-")
         if new == cleaned:
@@ -514,7 +516,13 @@ async def _store(
     resolved: dict[str, int | None],
     category: str = "general",
 ) -> int:
-    summary = _summary_from_post(raw_text, also_strip=extracted.bybit_nicknames)
+    # Вырезаем из reason всё, что уже в реквизитах: nicks + ФИО + банки
+    _strip_tokens = (
+        list(extracted.bybit_nicknames)
+        + list(extracted.full_names)
+        + list(extracted.banks)
+    )
+    summary = _summary_from_post(raw_text, also_strip=_strip_tokens)
     written = 0
     async with await psycopg.AsyncConnection.connect(dsn) as conn:
         await conn.execute("SET search_path TO skibidi, public")
@@ -773,7 +781,7 @@ async def seed_pending_from_existing(dsn: str, *, limit: int | None = None) -> i
             ext = extract(raw or "")
             if not ext.usernames:
                 continue
-            summary = _summary_from_post(raw or "", also_strip=ext.bybit_nicknames)
+            summary = _summary_from_post(raw or "", also_strip=list(ext.bybit_nicknames) + list(ext.full_names) + list(ext.banks))
             category = "p2p" if chat_id == -1003115834241 else "general"
             async with conn.cursor() as cur:
                 for u in ext.usernames:
