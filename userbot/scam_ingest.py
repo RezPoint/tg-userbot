@@ -19,7 +19,7 @@ from telethon.errors import FloodWaitError, UsernameInvalidError, UsernameNotOcc
 
 LOG = logging.getLogger(__name__)
 
-CARD_RE = re.compile(r"(?<!\d)(?:\d[\s-]?){13,18}\d(?!\d)")
+CARD_RE = re.compile(r"(?<!\d)(?:\d[\s-]?){12,15}\d(?!\d)")
 PHONE_RE = re.compile(r"(?<!\d)(?:(?:\+?7|8)[\s\-(]*)?9\d{2}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}(?!\d)")
 BYBIT_UID_RE = re.compile(r"bybit\.com/[^/]+/p2p/profile/(s[0-9a-f]+)", re.IGNORECASE)
 MEXC_UID_RE = re.compile(r"mexc\.com/[^/]+/p2p/profile/(\w+)", re.IGNORECASE)
@@ -242,7 +242,8 @@ def _normalize_phone(raw: str) -> str | None:
 
 def _normalize_card(raw: str) -> str | None:
     digits = re.sub(r"\D", "", raw)
-    if not (13 <= len(digits) <= 19):
+    # 17-19 знач — почти всегда order_id Bybit, не реальная карта
+    if not (13 <= len(digits) <= 16):
         return None
     if not _luhn_ok(digits):
         return None
@@ -423,6 +424,9 @@ def extract(text: str) -> Extracted:
                 low = v.lower()
                 if low in seen_fn:
                     continue
+        # Отбрасываем если новое имя — подмножество уже сохранённого ("АЛИ АЛИЕВ" vs "АЛИ АЛИЕВ Раяна")
+        if any(low in existing or existing in low for existing in seen_fn):
+            continue
         seen_fn.add(low)
         names.append(v)
 
@@ -500,7 +504,7 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     # Графика-разделители из BoxDrawing (├ │ └ ─ ━ ┌ ┐ ┘)
     cleaned = re.sub(r"[├│└┌┐┘┃─━═▬]+", "", cleaned)
     # Внимание: emoji *️⃣ содержит ASCII '*' в charset — обрабатываем отдельно.
-    cleaned = re.sub(r"[🆔🪪⏺️⭐🥷🔎🧑🏦📧👁📱💻📞✉️🖥️🎁][^\n]*", "", cleaned)
+    cleaned = re.sub(r"[🆔🪪⏺️⭐🥷🔎🧑🏦📧👁👤📱💻📞✉️🖥️🎁💳🏷🪙][^\n]*", "", cleaned)
     cleaned = re.sub(r"\*️⃣[^\n]*", "", cleaned)
     # Шаблонные лейблы P2P_BlackList — ловим только в начале строки, чтобы не съесть «ник» из «мошенник»
     cleaned = re.sub(
@@ -508,6 +512,11 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
         "",
         cleaned,
         flags=re.IGNORECASE,
+    )
+    # Inline-лейблы (могут быть в середине текста, не только в начале строки)
+    cleaned = re.sub(
+        r"\b(?:имя|фио|его\s+тг|его\s+telegram|его\s+дроп|тг\s+дропа|номер\s+карты|номер\s+телефона|карт[ыа]|почт[ыа]|email|e-mail)\s*:",
+        " ", cleaned, flags=re.IGNORECASE,
     )
     # Названия банков (нормализованные и сырые) — вырезаем из reason, они уже в реквизитах
     cleaned = BANK_RE.sub("", cleaned)
@@ -533,6 +542,9 @@ def _summary_from_post(text: str, also_strip: list[str] | None = None) -> str:
     while cleaned.count("(") > cleaned.count(")"):
         cleaned = cleaned.replace("(", "", 1)
     cleaned = re.sub(r"\(\s*\)", "", cleaned)
+    # Одиночные буквы с точкой (инициалы оставшиеся после вырезания ФИО): «а.», «А.», «И.»
+    cleaned = re.sub(r"(?<=\s)[А-Яа-яA-Za-z]\.(?=\s|,|$)", "", cleaned)
+    cleaned = re.sub(r"^\s*[А-Яа-яA-Za-z]\.\s+", "", cleaned)
     # «, ,», «,  ,» → одна запятая
     cleaned = re.sub(r",\s*,+", ",", cleaned)
     cleaned = re.sub(r"[,;:.]{2,}", ",", cleaned)
@@ -555,12 +567,13 @@ async def _store(
     resolved: dict[str, int | None],
     category: str = "general",
 ) -> int:
-    # Вырезаем из reason всё, что уже в реквизитах: nicks + ФИО + банки
-    _strip_tokens = (
-        list(extracted.bybit_nicknames)
-        + list(extracted.full_names)
-        + list(extracted.banks)
-    )
+    # Вырезаем из reason всё, что уже в реквизитах: nicks + ФИО (+ отдельные слова из ФИО) + банки
+    _strip_tokens = list(extracted.bybit_nicknames) + list(extracted.full_names) + list(extracted.banks)
+    # Добавляем отдельные слова из ФИО (≥3 char) для надёжного вырезания lowercase-вариантов
+    for fn in extracted.full_names:
+        for w in fn.split():
+            if len(w) >= 3 and not w.endswith("."):
+                _strip_tokens.append(w)
     summary = _summary_from_post(raw_text, also_strip=_strip_tokens)
     written = 0
     async with await psycopg.AsyncConnection.connect(dsn) as conn:
