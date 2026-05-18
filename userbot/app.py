@@ -44,6 +44,10 @@ class UserBot:
                 "scam_ingest: live на %d канал(ов) + автобэкфилл %d постов",
                 len(ingest_channels), backfill_n,
             )
+            # Фоновый дорезолв NULL-юзернеймов из scam_pending_usernames
+            asyncio.create_task(scam_ingest.run_dorezolv_loop(
+                self.user_client, self.config.supabase_dsn, interval_s=3600,
+            ))
         else:
             LOGGER.warning("scam_ingest выключен: канал/SUPABASE_DSN не заданы")
 

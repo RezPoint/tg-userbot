@@ -376,6 +376,17 @@ async def _store(
             for uname in extracted.usernames:
                 tg_id = resolved.get(uname.lower())
                 if tg_id is None:
+                    # Резолв не удался (флуд или временная ошибка) — кладём в pending,
+                    # фоновая корутина dorezolv_loop попытается позже.
+                    await cur.execute(
+                        """
+                        INSERT INTO scam_pending_usernames
+                            (username, source_chat_id, source_msg_id, source_url, summary, category)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (username, source_msg_id) DO NOTHING
+                        """,
+                        (uname, source_chat_id, source_msg_id, source_url, summary, category),
+                    )
                     continue
                 await cur.execute(
                     """
@@ -485,6 +496,118 @@ def channels_from_env() -> list[tuple[str | int, str]]:
             ch_val = ch
         out.append((ch_val, cat))
     return out
+
+
+async def dorezolv_pending_usernames(
+    client: TelegramClient, dsn: str, *, batch_size: int = 50, sleep_between_s: float = 8.0,
+) -> int:
+    """Один проход: достаёт batch юзернеймов из scam_pending_usernames, резолвит,
+    при успехе создаёт записи в scam_blacklist + UPDATE scam_credentials.scammer_tg_id
+    для всех записей этого поста + удаляет из pending. Возвращает кол-во разрешённых."""
+    resolved_n = 0
+    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+        await conn.execute("SET search_path TO skibidi, public")
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT DISTINCT ON (lower(username)) lower(username) AS uname
+                FROM scam_pending_usernames
+                ORDER BY lower(username), last_try_at NULLS FIRST, attempt_count ASC
+                LIMIT %s
+                """,
+                (batch_size,),
+            )
+            unames = [r[0] for r in await cur.fetchall()]
+
+        if not unames:
+            return 0
+        LOG.info("dorezolv: batch %d юзернеймов на резолв", len(unames))
+
+        for uname in unames:
+            if _time.monotonic() < _GLOBAL_FLOOD_UNTIL:
+                LOG.info("dorezolv: глобальный флуд активен, прерываем batch")
+                break
+            tg_id = await _resolve(client, uname)
+            async with conn.cursor() as cur:
+                if tg_id is None:
+                    await cur.execute(
+                        """
+                        UPDATE scam_pending_usernames
+                        SET attempt_count = attempt_count + 1, last_try_at = now()
+                        WHERE lower(username) = %s
+                        """,
+                        (uname,),
+                    )
+                    await conn.commit()
+                    if _time.monotonic() < _GLOBAL_FLOOD_UNTIL:
+                        break
+                    await asyncio.sleep(sleep_between_s)
+                    continue
+                # Получили tg_id — обновляем blacklist + credentials, удаляем pending
+                await cur.execute(
+                    """
+                    INSERT INTO scam_blacklist
+                        (target_tg_id, target_username, reason, source_chat_id, source_msg_id, category)
+                    SELECT %s, username, summary, source_chat_id, source_msg_id, category
+                    FROM scam_pending_usernames
+                    WHERE lower(username) = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    ON CONFLICT (target_tg_id) DO UPDATE
+                    SET target_username = EXCLUDED.target_username,
+                        source_chat_id  = COALESCE(scam_blacklist.source_chat_id, EXCLUDED.source_chat_id),
+                        source_msg_id   = COALESCE(scam_blacklist.source_msg_id,  EXCLUDED.source_msg_id),
+                        votes = scam_blacklist.votes + 1
+                    """,
+                    (tg_id, uname),
+                )
+                await cur.execute(
+                    """
+                    UPDATE scam_credentials sc
+                    SET scammer_tg_id = %s
+                    FROM scam_pending_usernames p
+                    WHERE p.lower_username = lower(p.username)
+                      AND lower(p.username) = %s
+                      AND sc.source_chat_id = p.source_chat_id
+                      AND sc.source_msg_id  = p.source_msg_id
+                      AND sc.scammer_tg_id IS NULL
+                    """,
+                    (tg_id, uname),
+                ) if False else await cur.execute(
+                    """
+                    UPDATE scam_credentials sc
+                    SET scammer_tg_id = %s
+                    FROM scam_pending_usernames p
+                    WHERE lower(p.username) = %s
+                      AND sc.source_chat_id = p.source_chat_id
+                      AND sc.source_msg_id  = p.source_msg_id
+                      AND sc.scammer_tg_id IS NULL
+                    """,
+                    (tg_id, uname),
+                )
+                await cur.execute(
+                    "DELETE FROM scam_pending_usernames WHERE lower(username) = %s",
+                    (uname,),
+                )
+                await conn.commit()
+                resolved_n += 1
+            await asyncio.sleep(sleep_between_s)
+    if resolved_n:
+        LOG.info("dorezolv: %d юзернеймов успешно резолвнуто", resolved_n)
+    return resolved_n
+
+
+async def run_dorezolv_loop(
+    client: TelegramClient, dsn: str, *, interval_s: int = 3600,
+) -> None:
+    """Фоновый таск: раз в N сек запускает один проход dorezolv_pending_usernames."""
+    LOG.info("dorezolv_loop: запущен, interval=%ss", interval_s)
+    while True:
+        try:
+            await dorezolv_pending_usernames(client, dsn)
+        except Exception:  # noqa: BLE001
+            LOG.exception("dorezolv: ошибка в итерации")
+        await asyncio.sleep(interval_s)
 
 
 async def register_listeners(
