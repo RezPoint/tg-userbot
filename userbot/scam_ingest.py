@@ -20,7 +20,7 @@ from telethon.errors import FloodWaitError, UsernameInvalidError, UsernameNotOcc
 LOG = logging.getLogger(__name__)
 
 CARD_RE = re.compile(r"(?<!\d)(?:\d[\s-]?){13,18}\d(?!\d)")
-PHONE_RE = re.compile(r"(?:\+?7|8)[\s\-(]*9\d{2}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}")
+PHONE_RE = re.compile(r"(?<!\d)(?:(?:\+?7|8)[\s\-(]*)?9\d{2}[\s\-)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}(?!\d)")
 BYBIT_UID_RE = re.compile(r"bybit\.com/[^/]+/p2p/profile/(s[0-9a-f]+)", re.IGNORECASE)
 MEXC_UID_RE = re.compile(r"mexc\.com/[^/]+/p2p/profile/(\w+)", re.IGNORECASE)
 # «⏺️ Реквизит: 9203041024» или «Реквизит: 9203041024» — 10–12 цифр без BIN.
@@ -95,6 +95,9 @@ def _luhn_ok(d: str) -> bool:
 
 def _normalize_phone(raw: str) -> str | None:
     digits = re.sub(r"\D", "", raw)
+    # РФ без префикса: 9XX XXX XX XX → 7 9XX XXX XX XX
+    if len(digits) == 10 and digits[0] == "9":
+        digits = "7" + digits
     if len(digits) != 11:
         return None
     if digits[0] == "8":
@@ -143,6 +146,10 @@ def extract(text: str) -> Extracted:
         return Extracted([], [], [], [], [], [], [], [], [])
     reporters = {m.group(1).lower() for m in REPORTER_USERNAME_RE.finditer(raw)}
     clean = REPORTER_LINE_RE.sub("", raw)
+    # Вырезаем URL'ы целиком — оттуда регексы CARD/PHONE/ACCOUNT ловят order_id как фейк-карту/телефон
+    clean = re.sub(r"https?://\S+", "", clean)
+    # Хэштеги тоже не должны попадать в FIO/nickname
+    clean = re.sub(r"#[\wЀ-ӿ]+", "", clean)
     usernames = []
     seen_u: set[str] = set()
     for m in USERNAME_RE.finditer(clean):
@@ -196,11 +203,7 @@ def extract(text: str) -> Extracted:
             continue
         seen_n.add(v.lower())
         nicks.append(v)
-    # auto-юзернеймы Bybit (UserXXXX) тоже считаем bybit_nickname
-    for m in BYBIT_AUTO_USER_RE.finditer(raw):
-        v = m.group(0)
-        if v.lower() not in seen_n:
-            seen_n.add(v.lower()); nicks.append(v)
+    # User<hash> — это автогенерированный placeholder Bybit, не реальный ник скаммера. Не сохраняем.
 
     uids_num, seen_un = [], set()
     for m in BYBIT_UID_NUM_RE.finditer(raw):
@@ -224,6 +227,7 @@ def extract(text: str) -> Extracted:
     # ФИО — ищем в очищенном тексте (без отправителя, ссылок и эмодзи-блоков)
     full_clean = REPORTER_LINE_RE.sub("", raw)
     full_clean = re.sub(r"https?://\S+", "", full_clean)
+    full_clean = re.sub(r"#[\wЀ-ӿ]+", "", full_clean)
     full_clean = re.sub(r"[🆔🪪⏺️⭐🥷*️⃣][^\n]*", "", full_clean)
     full_clean = BYBIT_AUTO_USER_RE.sub("", full_clean)
     names, seen_fn = [], set()
