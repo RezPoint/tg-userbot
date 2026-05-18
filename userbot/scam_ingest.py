@@ -575,15 +575,18 @@ async def _store(
     raw_text: str,
     resolved: dict[str, int | None],
     category: str = "general",
+    llm_reason: str | None = None,
 ) -> int:
-    # Вырезаем из reason всё, что уже в реквизитах: nicks + ФИО (+ отдельные слова из ФИО) + банки
-    _strip_tokens = list(extracted.bybit_nicknames) + list(extracted.full_names) + list(extracted.banks)
-    # Добавляем отдельные слова из ФИО (≥3 char) для надёжного вырезания lowercase-вариантов
-    for fn in extracted.full_names:
-        for w in fn.split():
-            if len(w) >= 3 and not w.endswith("."):
-                _strip_tokens.append(w)
-    summary = _summary_from_post(raw_text, also_strip=_strip_tokens)
+    # LLM-reason приоритетнее regex-summary (если LLM что-то дала)
+    if llm_reason:
+        summary = llm_reason
+    else:
+        _strip_tokens = list(extracted.bybit_nicknames) + list(extracted.full_names) + list(extracted.banks)
+        for fn in extracted.full_names:
+            for w in fn.split():
+                if len(w) >= 3 and not w.endswith("."):
+                    _strip_tokens.append(w)
+        summary = _summary_from_post(raw_text, also_strip=_strip_tokens)
     written = 0
     async with await psycopg.AsyncConnection.connect(dsn) as conn:
         await conn.execute("SET search_path TO skibidi, public")
@@ -648,7 +651,9 @@ async def _store(
     return written
 
 
-async def _process_message(client: TelegramClient, dsn: str, msg, category: str = "general") -> None:
+async def _process_message(
+    client: TelegramClient, dsn: str, msg, category: str = "general", *, use_llm: bool = False,
+) -> None:
     text = msg.text or msg.message or ""
     if not text:
         return
@@ -663,10 +668,24 @@ async def _process_message(client: TelegramClient, dsn: str, msg, category: str 
     resolved: dict[str, int | None] = {}
     for u in ext.usernames:
         resolved[u.lower()] = await _resolve(client, u)
-        # sleep между резолвами только если реально дёргали API (не из кэша)
         if _time.monotonic() < _GLOBAL_FLOOD_UNTIL:
             continue
         await asyncio.sleep(0.5)
+
+    # LLM-обогащение reason (только в live-режиме, не для backfill — там много запросов)
+    llm_reason: str | None = None
+    if use_llm:
+        api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("CEREBRAS_API_KEY") or os.environ.get("GROQ_API_KEY")
+        if api_key:
+            try:
+                from .llm_summary import llm_extract
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    r = await llm_extract(session, api_key, text)
+                if r and r.reason:
+                    llm_reason = r.reason
+            except Exception as e:  # noqa: BLE001
+                LOG.warning("scam_ingest: LLM enrich failed: %s", e)
 
     channel = await msg.get_chat()
     handle = getattr(channel, "username", None) or str(channel.id)
@@ -679,6 +698,7 @@ async def _process_message(client: TelegramClient, dsn: str, msg, category: str 
         raw_text=text,
         resolved=resolved,
         category=category,
+        llm_reason=llm_reason,
     )
     LOG.info(
         "scam_ingest: чан=%s msg=%s usernames=%d phones=%d cards=%d uid=%d → %d записей",
@@ -891,7 +911,8 @@ async def register_listeners(
 
         async def _handler(event, _dsn=dsn, _cat=cat):
             try:
-                await _process_message(client, _dsn, event.message, category=_cat)
+                # LIVE: использовать LLM для красивого reason
+                await _process_message(client, _dsn, event.message, category=_cat, use_llm=True)
             except Exception:  # noqa: BLE001
                 LOG.exception("scam_ingest: ошибка обработки сообщения")
 
