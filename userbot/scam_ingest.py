@@ -424,6 +424,15 @@ def extract(text: str) -> Extracted:
                 low = v.lower()
                 if low in seen_fn:
                     continue
+        # Финальный фикс: если в FIO встретился банк — отрезаем по нему (банк есть отдельно как kind='bank')
+        bank_match = BANK_RE.search(v)
+        if bank_match:
+            v = v[:bank_match.start()].strip()
+            if not v or len(v.split()) < 2:
+                continue
+            low = v.lower()
+            if low in seen_fn:
+                continue
         # Отбрасываем если новое имя — подмножество уже сохранённого ("АЛИ АЛИЕВ" vs "АЛИ АЛИЕВ Раяна")
         if any(low in existing or existing in low for existing in seen_fn):
             continue
