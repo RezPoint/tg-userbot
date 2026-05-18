@@ -386,10 +386,20 @@ def extract(text: str) -> Extracted:
         first = v.split()[0].lower()
         if first in {"скам", "скамер", "скаммер", "bybit", "mexc", "telegram", "user"}:
             continue
-        # отсечь CAPS-фразы из текста жалобы по stop-words
-        words_upper = {w.upper() for w in v.split()}
-        if words_upper & NAME_STOPWORDS:
-            continue
+        # Если в matched value есть стоп-слово после первых 2+ слов — обрезаем до него
+        words = v.split()
+        cut_at = None
+        for i, w in enumerate(words):
+            if w.upper() in NAME_STOPWORDS:
+                cut_at = i
+                break
+        if cut_at is not None:
+            if cut_at < 2:
+                continue  # стоп-слово в начале — всё ФИО мусорное
+            v = " ".join(words[:cut_at])
+            low = v.lower()
+            if low in seen_fn:
+                continue
         # отсечь явный мусор: слишком длинный (> 60 символов) или содержит подряд > 3 пробелов
         if len(v) > 60 or "    " in v:
             continue
