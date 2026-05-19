@@ -739,11 +739,16 @@ def channels_from_env() -> list[tuple[str | int, str]]:
 
 
 async def dorezolv_pending_usernames(
-    client: TelegramClient, dsn: str, *, batch_size: int = 50, sleep_between_s: float = 8.0,
+    client: TelegramClient, dsn: str, *, batch_size: int = 15, sleep_between_s: float = 30.0,
 ) -> int:
     """Один проход: достаёт batch юзернеймов из scam_pending_usernames, резолвит,
     при успехе создаёт записи в scam_blacklist + UPDATE scam_credentials.scammer_tg_id
     для всех записей этого поста + удаляет из pending. Возвращает кол-во разрешённых."""
+    # Если уже во флуде — этот проход вообще не запускаем
+    if _time.monotonic() < _GLOBAL_FLOOD_UNTIL:
+        remaining = int(_GLOBAL_FLOOD_UNTIL - _time.monotonic())
+        LOG.info("dorezolv: глобальный флуд ещё %ss, пропускаем проход", remaining)
+        return 0
     resolved_n = 0
     async with await psycopg.AsyncConnection.connect(dsn) as conn:
         await conn.execute("SET search_path TO skibidi, public")
@@ -767,9 +772,30 @@ async def dorezolv_pending_usernames(
             if _time.monotonic() < _GLOBAL_FLOOD_UNTIL:
                 LOG.info("dorezolv: глобальный флуд активен, прерываем batch")
                 break
+            prev_flood = _GLOBAL_FLOOD_UNTIL
             tg_id = await _resolve(client, uname)
             async with conn.cursor() as cur:
                 if tg_id is None:
+                    # Если резолв вылетел во флуд — откладываем именно этот username далеко
+                    # вперёд, чтобы при следующем проходе он не попал первым в очередь и
+                    # снова не триггернул бан
+                    if _GLOBAL_FLOOD_UNTIL > prev_flood:
+                        push_secs = max(int(_GLOBAL_FLOOD_UNTIL - _time.monotonic()) + 3600, 7200)
+                        await cur.execute(
+                            """
+                            UPDATE scam_pending_usernames
+                            SET attempt_count = attempt_count + 1,
+                                last_try_at = now() + make_interval(secs => %s)
+                            WHERE lower(username) = %s
+                            """,
+                            (push_secs, uname),
+                        )
+                        await conn.commit()
+                        LOG.warning(
+                            "dorezolv: @%s триггернул флуд, откладываю на %s сек",
+                            uname, push_secs,
+                        )
+                        break  # выходим из batch — мы во флуде
                     await cur.execute(
                         """
                         UPDATE scam_pending_usernames
@@ -779,8 +805,6 @@ async def dorezolv_pending_usernames(
                         (uname,),
                     )
                     await conn.commit()
-                    if _time.monotonic() < _GLOBAL_FLOOD_UNTIL:
-                        break
                     await asyncio.sleep(sleep_between_s)
                     continue
                 # Получили tg_id — обновляем blacklist + credentials, удаляем pending
@@ -898,9 +922,17 @@ async def seed_pending_from_existing(dsn: str, *, limit: int | None = None) -> i
 
 async def run_dorezolv_loop(
     client: TelegramClient, dsn: str, *, interval_s: int = 3600,
+    startup_delay_s: int = 120,
 ) -> None:
-    """Фоновый таск: раз в N сек запускает один проход dorezolv_pending_usernames."""
-    LOG.info("dorezolv_loop: запущен, interval=%ss", interval_s)
+    """Фоновый таск: раз в N сек запускает один проход dorezolv_pending_usernames.
+    На старте ждёт startup_delay_s секунд чтобы избежать удара по только что
+    поднявшейся сессии (Telegram чувствителен к массовым резолвам сразу после connect).
+    """
+    LOG.info(
+        "dorezolv_loop: запущен, startup_delay=%ss interval=%ss",
+        startup_delay_s, interval_s,
+    )
+    await asyncio.sleep(startup_delay_s)
     while True:
         try:
             await dorezolv_pending_usernames(client, dsn)
