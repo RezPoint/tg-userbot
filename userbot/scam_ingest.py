@@ -669,12 +669,10 @@ async def _process_message(
     ):
         return
 
-    resolved: dict[str, int | None] = {}
-    for u in ext.usernames:
-        resolved[u.lower()] = await _resolve(client, u)
-        if _time.monotonic() < _GLOBAL_FLOOD_UNTIL:
-            continue
-        await asyncio.sleep(0.5)
+    # В live-режиме НЕ резолвим username inline — это первое что ловит FLOOD_WAIT
+    # на холодной сессии и убивает резолвы на часы. Username'ы складываются в pending,
+    # dorezolv-loop разрулит их позже (с startup_delay + защитой от плохих username'ов).
+    resolved: dict[str, int | None] = {u.lower(): None for u in ext.usernames}
 
     # LLM-обогащение reason (только в live-режиме, не для backfill — там много запросов)
     llm_reason: str | None = None
