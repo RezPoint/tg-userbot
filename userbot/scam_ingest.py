@@ -736,6 +736,36 @@ def channels_from_env() -> list[tuple[str | int, str]]:
     return out
 
 
+PENDING_MAX_ATTEMPTS = 20  # после стольких попыток считаем username неразрешимым
+PENDING_STALE_DAYS = 30    # старше N дней + ≥5 попыток — выкидываем
+PENDING_HARD_TTL_DAYS = 180  # абсолютный TTL — в любом случае
+
+
+async def _cleanup_unresolvable_pending(conn) -> int:
+    """Удаляет записи из scam_pending_usernames:
+    - attempt_count >= PENDING_MAX_ATTEMPTS (юзер скрыл username, не резолвится)
+    - attempt_count >= 5 AND старше PENDING_STALE_DAYS
+    - в любом случае старше PENDING_HARD_TTL_DAYS
+    Возвращает кол-во удалённых."""
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            WITH d AS (
+              DELETE FROM scam_pending_usernames
+              WHERE attempt_count >= %s
+                 OR (attempt_count >= 5 AND created_at < now() - make_interval(days => %s))
+                 OR created_at < now() - make_interval(days => %s)
+              RETURNING 1
+            )
+            SELECT count(*) FROM d
+            """,
+            (PENDING_MAX_ATTEMPTS, PENDING_STALE_DAYS, PENDING_HARD_TTL_DAYS),
+        )
+        row = await cur.fetchone()
+    await conn.commit()
+    return int(row[0]) if row else 0
+
+
 async def dorezolv_pending_usernames(
     client: TelegramClient, dsn: str, *, batch_size: int = 15, sleep_between_s: float = 30.0,
 ) -> int:
@@ -750,6 +780,13 @@ async def dorezolv_pending_usernames(
     resolved_n = 0
     async with await psycopg.AsyncConnection.connect(dsn) as conn:
         await conn.execute("SET search_path TO skibidi, public")
+        # Чистим неразрешимые перед каждым проходом
+        try:
+            removed = await _cleanup_unresolvable_pending(conn)
+            if removed:
+                LOG.info("dorezolv: cleanup — удалено %d неразрешимых pending", removed)
+        except Exception as e:  # noqa: BLE001
+            LOG.warning("dorezolv cleanup failed: %s", e)
         async with conn.cursor() as cur:
             await cur.execute(
                 """
