@@ -799,22 +799,27 @@ async def dorezolv_pending_usernames(
                 )
                 await cur.execute(
                     """
-                    UPDATE scam_credentials sc
+                    WITH candidates AS (
+                        SELECT DISTINCT ON (sc.kind, sc.value) sc.id
+                        FROM scam_credentials sc
+                        JOIN scam_pending_usernames p
+                          ON sc.source_chat_id = p.source_chat_id
+                         AND sc.source_msg_id  = p.source_msg_id
+                        WHERE lower(p.username) = %s
+                          AND sc.scammer_tg_id IS NULL
+                          AND NOT EXISTS (
+                              SELECT 1 FROM scam_credentials sc2
+                              WHERE sc2.kind = sc.kind
+                                AND sc2.value = sc.value
+                                AND sc2.scammer_tg_id = %s
+                          )
+                        ORDER BY sc.kind, sc.value, sc.id
+                    )
+                    UPDATE scam_credentials
                     SET scammer_tg_id = %s
-                    FROM scam_pending_usernames p
-                    WHERE lower(p.username) = %s
-                      AND sc.source_chat_id = p.source_chat_id
-                      AND sc.source_msg_id  = p.source_msg_id
-                      AND sc.scammer_tg_id IS NULL
-                      AND NOT EXISTS (
-                          SELECT 1 FROM scam_credentials sc2
-                          WHERE sc2.kind = sc.kind
-                            AND sc2.value = sc.value
-                            AND sc2.scammer_tg_id = %s
-                            AND sc2.id <> sc.id
-                      )
+                    WHERE id IN (SELECT id FROM candidates)
                     """,
-                    (tg_id, uname, tg_id),
+                    (uname, tg_id, tg_id),
                 )
                 await cur.execute(
                     """
