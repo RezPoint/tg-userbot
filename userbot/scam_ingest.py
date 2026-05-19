@@ -802,24 +802,30 @@ async def dorezolv_pending_usernames(
                     UPDATE scam_credentials sc
                     SET scammer_tg_id = %s
                     FROM scam_pending_usernames p
-                    WHERE p.lower_username = lower(p.username)
-                      AND lower(p.username) = %s
+                    WHERE lower(p.username) = %s
                       AND sc.source_chat_id = p.source_chat_id
                       AND sc.source_msg_id  = p.source_msg_id
                       AND sc.scammer_tg_id IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM scam_credentials sc2
+                          WHERE sc2.kind = sc.kind
+                            AND sc2.value = sc.value
+                            AND sc2.scammer_tg_id = %s
+                            AND sc2.id <> sc.id
+                      )
                     """,
-                    (tg_id, uname),
-                ) if False else await cur.execute(
+                    (tg_id, uname, tg_id),
+                )
+                await cur.execute(
                     """
-                    UPDATE scam_credentials sc
-                    SET scammer_tg_id = %s
-                    FROM scam_pending_usernames p
+                    DELETE FROM scam_credentials sc
+                    USING scam_pending_usernames p
                     WHERE lower(p.username) = %s
                       AND sc.source_chat_id = p.source_chat_id
                       AND sc.source_msg_id  = p.source_msg_id
                       AND sc.scammer_tg_id IS NULL
                     """,
-                    (tg_id, uname),
+                    (uname,),
                 )
                 await cur.execute(
                     "DELETE FROM scam_pending_usernames WHERE lower(username) = %s",
