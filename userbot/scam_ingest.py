@@ -655,6 +655,25 @@ async def _store(
     return written
 
 
+def merge_full_names(existing: list[str], llm_names: list[str], text: str) -> list[str]:
+    """Добавляет ФИО от LLM к regex-результату. LLM ловит неформальные имена,
+    которые regex пропускает («НИКОЛАЙ Б.» рядом с банком). Анти-галлюцинация:
+    значимые токены (≥3 символов) имени должны присутствовать в тексте поста."""
+    text_lc = text.lower()
+    out = list(existing)
+    have = {x.lower() for x in out}
+    for nm in (llm_names or []):
+        nm = (nm or "").strip()
+        low = nm.lower()
+        if not nm or low in have:
+            continue
+        toks = [t for t in low.replace(".", " ").split() if len(t) >= 3]
+        if toks and all(t in text_lc for t in toks):
+            out.append(nm)
+            have.add(low)
+    return out
+
+
 async def _process_message(
     client: TelegramClient, dsn: str, msg, category: str = "general", *, use_llm: bool = False,
 ) -> None:
@@ -684,8 +703,11 @@ async def _process_message(
                 import aiohttp
                 async with aiohttp.ClientSession() as session:
                     r = await llm_extract(session, api_key, text)
-                if r and r.reason:
-                    llm_reason = r.reason
+                if r:
+                    if r.reason:
+                        llm_reason = r.reason
+                    if r.full_names:
+                        ext.full_names = merge_full_names(ext.full_names, r.full_names, text)
             except Exception as e:  # noqa: BLE001
                 LOG.warning("scam_ingest: LLM enrich failed: %s", e)
 
