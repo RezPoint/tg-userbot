@@ -2,14 +2,16 @@ services:
   bot:
     build: .
     image: tg-userbot:local
-    container_name: tg-userbot
+    container_name: anstantalone-telethon
     restart: unless-stopped
     env_file: .env
     volumes:
       - ./data:/app/data
       - ./sessions:/app/sessions
     networks:
-      - supabase
+      supabase:
+        aliases:
+          - tg-userbot
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8083/health', timeout=3).status==200 else 1)"]
       interval: 30s
