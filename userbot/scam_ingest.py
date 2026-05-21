@@ -959,7 +959,9 @@ async def seed_pending_from_existing(dsn: str, *, limit: int | None = None) -> i
             if not ext.usernames:
                 continue
             summary = _summary_from_post(raw or "", also_strip=list(ext.bybit_nicknames) + list(ext.full_names) + list(ext.banks))
-            category = "p2p" if chat_id == -1003115834241 else "general"
+            # Telethon хранит id канала без префикса -100: -1003115834241 → 3115834241.
+            # Сравниваем обе формы, иначе категория ошибочно сваливается в general.
+            category = "p2p" if chat_id in (-1003115834241, 3115834241) else "general"
             async with conn.cursor() as cur:
                 for u in ext.usernames:
                     await cur.execute(
