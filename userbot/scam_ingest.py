@@ -646,7 +646,8 @@ async def _store(
                         INSERT INTO scam_credentials
                             (kind, value, scammer_tg_id, source_chat_id, source_msg_id, source_url, raw_text)
                         VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (kind, value, scammer_tg_id) DO NOTHING
+                        ON CONFLICT (kind, value, COALESCE(scammer_tg_id, 0),
+                                     COALESCE(source_chat_id, 0), COALESCE(source_msg_id, 0)) DO NOTHING
                         """,
                         (kind, v, primary_tg_id, source_chat_id, source_msg_id, source_url, raw_text[:2000]),
                     )
