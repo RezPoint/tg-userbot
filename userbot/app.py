@@ -51,24 +51,8 @@ class UserBot:
         else:
             LOGGER.warning("scam_ingest выключен: канал/SUPABASE_DSN не заданы")
 
-        # Постоянный харвест комментариев вспомогательным аккаунтом (Nikita/@AliazPr)
-        import os as _os2
-        from pathlib import Path as _Path
-        nikita_session = _os2.environ.get(
-            "HARVEST_SESSION", str(self.config.user_session_path.parent / "nikita"),
-        )
-        if (
-            self.config.supabase_dsn
-            and _os2.environ.get("HARVEST_ENABLED", "1") != "0"
-            and _Path(nikita_session + ".session").exists()
-        ):
-            from . import comment_harvest
-            asyncio.create_task(comment_harvest.run_harvest_loop(
-                self.config.api_id, self.config.api_hash,
-                self.config.supabase_dsn, nikita_session,
-                interval_s=int(_os2.environ.get("HARVEST_INTERVAL_S", str(6 * 3600))),
-            ))
-            LOGGER.info("comment_harvest: запущен на сессии %s", nikita_session)
+        # comment_harvest перенесён в tg-tdlib (bulk_history) — @AliazPr теперь
+        # обслуживается только через TDLib, без второй Telethon-сессии.
 
         await self._wait_until_stopped()
 
