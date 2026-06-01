@@ -5,6 +5,7 @@ import re
 from aiohttp import web
 from telethon import TelegramClient
 from telethon.tl.functions.users import GetFullUserRequest
+from telethon.tl.types import User
 
 from .scam_ingest import _resolve
 
@@ -52,6 +53,8 @@ async def start_health_server(user_client: TelegramClient, port: int = 8083) -> 
             )
         try:
             entity = await user_client.get_entity(raw)
+            if not isinstance(entity, User):
+                return web.json_response({"found": False, "reason": "not_a_user"})
             full = await user_client(GetFullUserRequest(entity))
             return web.json_response({
                 "found": True,
