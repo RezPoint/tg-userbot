@@ -7,8 +7,8 @@ import signal
 
 from telethon import TelegramClient, events
 
-from .config import RuntimeConfig
 from . import scam_ingest
+from .config import RuntimeConfig
 from .health import start_health_server
 
 LOGGER = logging.getLogger("userbot")
@@ -24,6 +24,7 @@ class UserBot:
             str(config.bot_session_path), config.api_id, config.api_hash,
         )
         self._stop = asyncio.Event()
+        self._backfill_lock = asyncio.Lock()
 
     async def run(self) -> None:
         self._register_bot_commands()
@@ -35,7 +36,13 @@ class UserBot:
         ingest_channels = scam_ingest.channels_from_env()
         if ingest_channels and self.config.supabase_dsn:
             import os as _os
-            backfill_n = int(_os.environ.get("SKIBIDI_SCAM_INGEST_BACKFILL", "30"))
+            configured_backfill = int(_os.environ.get("SKIBIDI_SCAM_INGEST_BACKFILL", "30"))
+            backfill_n = min(max(configured_backfill, 0), self.config.scam_backfill_max)
+            if backfill_n != configured_backfill:
+                LOGGER.warning(
+                    "scam_ingest: startup backfill ограничен %d вместо %d",
+                    backfill_n, configured_backfill,
+                )
             await scam_ingest.register_listeners(
                 self.user_client, ingest_channels, self.config.supabase_dsn,
                 backfill_on_start=backfill_n,
@@ -86,19 +93,32 @@ class UserBot:
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/scam_backfill(?:\s+(\d+))?"))
         async def scam_backfill(event: events.NewMessage.Event) -> None:
+            if event.sender_id not in self.config.admin_user_ids:
+                await event.respond("⛔ Команда доступна только владельцу.")
+                return
             chans = scam_ingest.channels_from_env()
             if not chans or not self.config.supabase_dsn:
                 await event.respond("❌ SKIBIDI_SCAM_INGEST_CHANNELS или SUPABASE_DSN не заданы.")
                 return
             limit = int(event.pattern_match.group(1) or 30)
-            await event.respond(f"⏳ Backfill: {len(chans)} канал(ов), по {limit} постов.")
-            try:
-                await scam_ingest.backfill(
-                    self.user_client, chans, self.config.supabase_dsn, limit=limit,
+            if limit < 1 or limit > self.config.scam_backfill_max:
+                await event.respond(
+                    f"❌ Допустимый размер backfill: 1–{self.config.scam_backfill_max}.",
                 )
-                await event.respond("✅ Backfill завершён, см. логи.")
-            except Exception as e:  # noqa: BLE001
-                await event.respond(f"❌ Ошибка backfill: {e}")
+                return
+            if self._backfill_lock.locked():
+                await event.respond("⏳ Backfill уже выполняется.")
+                return
+            async with self._backfill_lock:
+                await event.respond(f"⏳ Backfill: {len(chans)} канал(ов), по {limit} постов.")
+                try:
+                    await scam_ingest.backfill(
+                        self.user_client, chans, self.config.supabase_dsn, limit=limit,
+                    )
+                    await event.respond("✅ Backfill завершён, см. логи.")
+                except Exception as e:
+                    LOGGER.exception("manual scam backfill failed")
+                    await event.respond(f"❌ Ошибка backfill: {type(e).__name__}")
 
         @self.bot_client.on(events.NewMessage(pattern=r"^/stop"))
         async def stop(event: events.NewMessage.Event) -> None:
