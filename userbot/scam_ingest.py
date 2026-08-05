@@ -202,7 +202,7 @@ BANK_RE = re.compile(
     re.IGNORECASE,
 )
 
-USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{3,31})")
+USERNAME_RE = re.compile(r"(?<![\w.+-])@([A-Za-z][A-Za-z0-9_]{3,31})")
 # Строка отправителя: с @username, или с произвольным значением после двоеточия
 REPORTER_LINE_RE = re.compile(
     r"(?:🗣|🥷)?\s*(?:[Оо]тправитель|[Пп]рислал|[Ии]сточник|[Аа]втор)\s*:?\s*[^\n]*",
@@ -612,8 +612,16 @@ async def _store(
                     continue
                 await cur.execute(
                     """
-                    INSERT INTO scam_blacklist (target_tg_id, target_username, reason, source_chat_id, source_msg_id, category)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    WITH new_source AS (
+                        INSERT INTO scam_report_sources
+                            (target_tg_id, target_username, source_chat_id, source_msg_id, category)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (target_tg_id, source_chat_id, source_msg_id) DO NOTHING
+                        RETURNING 1
+                    )
+                    INSERT INTO scam_blacklist
+                        (target_tg_id, target_username, reason, source_chat_id, source_msg_id, category)
+                    SELECT %s, %s, %s, %s, %s, %s FROM new_source
                     ON CONFLICT (target_tg_id) DO UPDATE
                     SET target_username = EXCLUDED.target_username,
                         source_chat_id  = COALESCE(scam_blacklist.source_chat_id, EXCLUDED.source_chat_id),
@@ -621,9 +629,12 @@ async def _store(
                         category        = CASE WHEN scam_blacklist.category = 'general' THEN EXCLUDED.category ELSE scam_blacklist.category END,
                         votes = scam_blacklist.votes + 1
                     """,
-                    (tg_id, uname, summary, source_chat_id, source_msg_id, category),
+                    (
+                        tg_id, uname, source_chat_id, source_msg_id, category,
+                        tg_id, uname, summary, source_chat_id, source_msg_id, category,
+                    ),
                 )
-                written += 1
+                written += max(cur.rowcount, 0)
 
             primary_tg_id = next(
                 (resolved[u.lower()] for u in extracted.usernames if resolved.get(u.lower())),
@@ -868,20 +879,39 @@ async def dorezolv_pending_usernames(
                 # Получили tg_id — обновляем blacklist + credentials, удаляем pending
                 await cur.execute(
                     """
+                    WITH pending_sources AS (
+                        SELECT DISTINCT ON (COALESCE(source_chat_id, 0), COALESCE(source_msg_id, 0))
+                            username, summary, COALESCE(source_chat_id, 0) AS source_chat_id,
+                            COALESCE(source_msg_id, 0) AS source_msg_id, category, created_at
+                        FROM scam_pending_usernames
+                        WHERE lower(username) = %s
+                        ORDER BY COALESCE(source_chat_id, 0), COALESCE(source_msg_id, 0), created_at DESC
+                    ), new_sources AS (
+                        INSERT INTO scam_report_sources
+                            (target_tg_id, target_username, source_chat_id, source_msg_id, category)
+                        SELECT %s, username, source_chat_id, source_msg_id, category
+                        FROM pending_sources
+                        ON CONFLICT (target_tg_id, source_chat_id, source_msg_id) DO NOTHING
+                        RETURNING 1
+                    ), latest AS (
+                        SELECT * FROM pending_sources ORDER BY created_at DESC LIMIT 1
+                    ), source_count AS (
+                        SELECT count(*)::int AS votes FROM new_sources
+                    )
                     INSERT INTO scam_blacklist
-                        (target_tg_id, target_username, reason, source_chat_id, source_msg_id, category)
-                    SELECT %s, username, summary, source_chat_id, source_msg_id, category
-                    FROM scam_pending_usernames
-                    WHERE lower(username) = %s
-                    ORDER BY created_at DESC
-                    LIMIT 1
+                        (target_tg_id, target_username, reason, source_chat_id,
+                         source_msg_id, category, votes)
+                    SELECT %s, latest.username, latest.summary, latest.source_chat_id,
+                           latest.source_msg_id, latest.category, source_count.votes
+                    FROM latest CROSS JOIN source_count
+                    WHERE source_count.votes > 0
                     ON CONFLICT (target_tg_id) DO UPDATE
                     SET target_username = EXCLUDED.target_username,
                         source_chat_id  = COALESCE(scam_blacklist.source_chat_id, EXCLUDED.source_chat_id),
                         source_msg_id   = COALESCE(scam_blacklist.source_msg_id,  EXCLUDED.source_msg_id),
-                        votes = scam_blacklist.votes + 1
+                        votes = scam_blacklist.votes + EXCLUDED.votes
                     """,
-                    (tg_id, uname),
+                    (uname, tg_id, tg_id),
                 )
                 await cur.execute(
                     """

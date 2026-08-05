@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from userbot.scam_ingest import merge_full_names  # noqa: E402
+from userbot.scam_ingest import extract, merge_full_names  # noqa: E402
 
 
 def eq(got, exp, msg):
@@ -36,6 +36,16 @@ def test_keeps_existing_and_appends():
 
 def test_empty_llm():
     eq(merge_full_names(["Иван Иванов"], [], "Иван Иванов"), ["Иван Иванов"], "empty llm")
+
+
+def test_email_domain_is_not_telegram_username():
+    result = extract("Почта: glebaskonev@yandex.ru и ba***0@yandex.ru")
+    eq(result.usernames, [], "email domain skipped")
+
+
+def test_real_telegram_username_is_kept():
+    result = extract("Телеграм: @real_user")
+    eq(result.usernames, ["real_user"], "telegram username kept")
 
 
 if __name__ == "__main__":
